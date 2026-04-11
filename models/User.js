@@ -35,6 +35,8 @@ const UserSchema = new mongoose.Schema({
     enum: ['active', 'blocked', 'pending'],
     default: 'active'
   },
+  membershipType: { type: String, default: 'Free Member' },
+  walletBalance: { type: Number, default: 0 },
   avatar: String,
   location: String,
   
