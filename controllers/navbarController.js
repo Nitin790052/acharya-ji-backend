@@ -5,12 +5,10 @@ const VastuPageContent = require('../models/VastuPageContent');
 const HealingPageContent = require('../models/HealingPageContent');
 const LearningPageContent = require('../models/LearningPageContent');
 
-
 // Get all navbar items
 const getNavbarItems = async (req, res) => {
     try {
         const items = await Navbar.find().sort({ order: 1 }).lean();
-
         // Dynamically fetch active pages from various modules
         const activeKundliPages = await KundliPageContent.find({ isActive: true }).sort('order').lean();
         const activeAstrologyPages = await AstrologyPageContent.find({ isActive: true }).sort('order').lean();
@@ -58,16 +56,12 @@ const getNavbarItems = async (req, res) => {
                         isDynamic: true
                     }));
             }
-
-
-
             if (dynamicChildren.length > 0) {
                 // Smart Merge: Update manual children with dynamic hrefs, then append new dynamic ones
                 const manualChildren = item.children || [];
                 const manualLabels = new Set(manualChildren.map(c => (c.label || '').toLowerCase().trim()));
 
                 const dynamicLabelMap = new Map(dynamicChildren.map(dc => [(dc.label || '').toLowerCase().trim(), dc]));
-
                 const updatedManualChildren = manualChildren.map(mc => {
                     const labelLower = (mc.label || '').toLowerCase().trim();
                     if (labelLower && dynamicLabelMap.has(labelLower)) {
