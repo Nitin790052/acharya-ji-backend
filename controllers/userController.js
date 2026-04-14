@@ -275,13 +275,22 @@ exports.registerUser = async (req, res) => {
  */
 exports.loginUser = async (req, res) => {
     try {
-        const { email, phone, password, loginType } = req.body;
-        let user;
-        if (loginType === 'email') {
-            user = await User.findOne({ email }).select('+password');
-        } else {
-            user = await User.findOne({ phone }).select('+password');
+        const { email, phone, password, loginType, identifier } = req.body;
+        
+        // Robust identifier selection
+        const loginId = identifier || email || phone;
+        
+        if (!loginId) {
+            return res.status(400).json({ success: false, message: 'Please provide email or phone' });
         }
+
+        // Search by both email and phone for maximum flexibility
+        const user = await User.findOne({
+            $or: [
+                { email: loginId.toLowerCase() },
+                { phone: loginId }
+            ]
+        }).select('+password');
 
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
@@ -301,6 +310,25 @@ exports.loginUser = async (req, res) => {
         const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET || 'secret', {
             expiresIn: '30d'
         });
+
+        // Update last active and login history
+        const userAgent = req.headers['user-agent'] || 'Unknown Device';
+        let device = 'Desktop';
+        if (/mobile/i.test(userAgent)) device = 'Mobile';
+        if (/tablet/i.test(userAgent)) device = 'Tablet';
+        
+        user.lastActive = new Date();
+        if (!user.loginHistory) user.loginHistory = [];
+        
+        user.loginHistory.unshift({
+            device: `${device} (${userAgent.split(' ')[0]})`,
+            location: 'Noida, India', 
+            ip: req.ip,
+            timestamp: new Date()
+        });
+
+        if (user.loginHistory.length > 10) user.loginHistory.pop();
+        await user.save();
 
         res.status(200).json({
             success: true,
@@ -327,28 +355,42 @@ exports.getUserDashboard = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
-        // Dashboard Metrics (Aggregated or mock for now)
+        const Booking = require('../models/Booking');
+        
+        // Flexible query: User ID OR matching Mobile Number
+        const query = {
+            $or: [
+                { user: userId },
+                { mobile: user.phone || user.mobile }
+            ]
+        };
+
+        const userBookings = await Booking.find(query).sort({ createdAt: -1 }).limit(10);
+        const totalBookings = await Booking.countDocuments(query);
+        const pendingBookings = await Booking.countDocuments({ ...query, status: 'Pending' });
+        
+        // Calculate Total Spending
+        const allBookings = await Booking.find(query);
+        const totalSpent = allBookings.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+
+        console.log(`DASHBOARD: Found ${totalBookings} total bookings for query:`, JSON.stringify(query));
+
+        // Dashboard Metrics (Aggregated with dynamic data)
         const summary = [
-            { id: 1, label: 'Total Orders', value: user.totalOrders || 0, growth: '+2', type: 'order' },
-            { id: 2, label: 'Pending Payments', value: '₹1,200', growth: '2 items', type: 'payment' },
-            { id: 3, label: 'History Records', value: '18', growth: '+5', type: 'history' },
+            { id: 1, label: 'Total Orders', value: totalBookings, growth: '+0', type: 'order' },
+            { id: 2, label: 'Pending Bookings', value: pendingBookings, growth: `${pendingBookings} items`, type: 'history' },
+            { id: 3, label: 'Total Spending', value: `₹${totalSpent}`, growth: '+₹0', type: 'payment' },
             { id: 4, label: 'Wallet Balance', value: `₹${user.walletBalance || 0}`, growth: '+₹0', type: 'wallet' },
             { id: 5, label: 'Membership Status', value: user.membershipType || 'Free', growth: 'Active', type: 'membership' }
         ];
 
-        const recentOrders = [
-            { id: 'ORD001', service: 'Satyanarayan Puja', date: '25 June 2024', status: 'completed', amount: '₹3,500' },
-            { id: 'ORD002', service: 'Kundli Report', date: '22 June 2024', status: 'pending', amount: '₹599' },
-            { id: 'ORD003', service: 'Gemstone', date: '23 June 2024', status: 'confirmed', amount: '₹2,499' },
-            { id: 'ORD004', service: 'Consultation', date: '24 June 2024', status: 'completed', amount: '₹299' },
-            { id: 'ORD005', service: 'Ganesh Abhishek', date: '20 June 2024', status: 'cancelled', amount: '₹2,500' }
-        ];
-
-        const notifications = [
-            { id: 1, message: 'Welcome to your new dashboard!', time: '1 hour ago', unread: true, type: 'reminder' },
-            { id: 2, message: 'Please complete your profile for better experience', time: '2 hours ago', unread: true, type: 'alert' },
-            { id: 3, message: 'Special discount on Rudrabhishek - 20% off', time: '5 hours ago', unread: false, type: 'offer' }
-        ];
+        const recentOrders = userBookings.map(b => ({
+            id: b._id.toString().substring(0, 8).toUpperCase(),
+            service: b.pujaType,
+            date: new Date(b.createdAt).toLocaleDateString('en-GB'),
+            status: b.status.toLowerCase(),
+            amount: b.amount ? `₹${b.amount}` : '₹0'
+        }));
 
         console.log(`Sending dashboard data for: ${user.name}`);
         res.status(200).json({
@@ -358,23 +400,383 @@ exports.getUserDashboard = async (req, res) => {
                     name: user.name,
                     email: user.email,
                     membershipType: user.membershipType || 'Free Member',
-                    lastLogin: user.lastActive || 'Just now',
-                    memberSince: user.createdAt ? new Date(user.createdAt).getFullYear() : '2026'
+                    lastLogin: user.loginHistory && user.loginHistory.length > 1 
+                        ? user.loginHistory[1] 
+                        : (user.createdAt ? { timestamp: user.createdAt, device: 'First Login', location: 'Account created' } : 'Just now'),
+                    memberSince: user.createdAt ? new Date(user.createdAt).getFullYear() : '2023'
                 },
                 summary,
                 recentOrders,
-                notifications,
+                notifications: [
+                    { id: 1, message: 'Welcome to your new dashboard!', time: 'Recently', unread: true, type: 'reminder' },
+                    { id: 2, message: 'Your spiritual journey begins here.', time: 'Always', unread: false, type: 'offer' }
+                ],
                 latestPayment: {
                     status: 'success',
-                    amount: '₹3,500',
+                    amount: '₹0',
                     method: 'Razorpay',
-                    date: '25 June 2024',
-                    time: '10:00 AM'
+                    date: 'N/A',
+                    time: 'N/A'
                 }
             }
         });
     } catch (error) {
         console.error("DASHBOARD ERROR:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Get all orders/bookings for current user
+ * @route   GET /api/users/orders
+ */
+exports.getUserOrders = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { status } = req.query;
+        const user = await User.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const Booking = require('../models/Booking');
+        
+        // Build flexible query (match by user ID OR phone number)
+        const query = {
+            $or: [
+                { user: userId },
+                { mobile: user.phone || user.mobile }
+            ]
+        };
+
+        // Apply status filter if provided
+        if (status && status !== 'all') {
+            query.status = { $regex: new RegExp(`^${status}$`, 'i') };
+        }
+
+        const bookings = await Booking.find(query).sort({ createdAt: -1 });
+        console.log(`ORDERS: Found ${bookings.length} bookings for status: ${status || 'all'}. Query:`, JSON.stringify(query));
+
+        // Map to frontend structure
+        const formattedOrders = bookings.map(b => ({
+            id: b._id.toString().substring(0, 8).toUpperCase(),
+            dbId: b._id,
+            date: new Date(b.createdAt).toLocaleDateString('en-GB'),
+            time: new Date(b.createdAt).toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit'
+            }),
+            serviceName: b.pujaType || 'Service',
+            customerName: b.name || user.name,
+            status: b.status.toLowerCase(),
+            paymentStatus: b.paymentStatus || 'pending',
+            amount: b.amount || 0,
+            paymentMethod: b.paymentMethod || 'Razorpay',
+            priest: b.priest || 'Assigned Soon',
+            location: b.city || 'TBD',
+            type: b.mode ? (b.mode === 'Online' ? 'online' : 'offline') : 'online'
+        }));
+
+        res.status(200).json({
+            success: true,
+            count: formattedOrders.length,
+            data: formattedOrders
+        });
+    } catch (error) {
+        console.error("ORDERS ERROR:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Get current user profile
+ * @route   GET /api/users/profile
+ */
+exports.getProfile = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+        res.status(200).json({ success: true, data: user });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Update user profile
+ * @route   PUT /api/users/profile
+ */
+exports.updateProfile = async (req, res) => {
+    try {
+        const { name, phone, address, avatar, notificationSettings, language, theme } = req.body;
+        
+        const updateData = {};
+        if (name) updateData.name = name;
+        if (phone) updateData.phone = phone;
+        if (address) updateData.address = address;
+        if (avatar) updateData.avatar = avatar;
+        if (notificationSettings) updateData.notificationSettings = notificationSettings;
+        if (language) updateData.language = language;
+        if (theme) updateData.theme = theme;
+
+        const user = await User.findByIdAndUpdate(
+            req.user.id,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Profile updated successfully',
+            data: user
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Change user password
+ * @route   PUT /api/users/change-password
+ */
+exports.updatePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const user = await User.findById(req.user.id).select('+password');
+
+        if (!(await user.matchPassword(currentPassword))) {
+            return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+        }
+
+        user.password = newPassword;
+        await user.save();
+
+        res.status(200).json({ success: true, message: 'Password updated successfully' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Upload user avatar
+ * @route   POST /api/users/upload-avatar
+ */
+exports.uploadAvatar = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'Please upload a file' });
+        }
+
+        const { convertToWebp } = require('../utils/imageUtils');
+        const webpPath = await convertToWebp(req.file.path);
+        const relativePath = `/${webpPath.replace(/\\/g, '/')}`;
+
+        const user = await User.findByIdAndUpdate(
+            req.user.id,
+            { avatar: relativePath },
+            { new: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Profile picture updated',
+            data: user.avatar
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Cancel a pending order
+ * @route   PATCH /api/users/orders/:id/cancel
+ */
+exports.cancelOrder = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const orderId = req.params.id;
+        const user = await User.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const Booking = require('../models/Booking');
+        const booking = await Booking.findById(orderId);
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+
+        // Verify ownership (Check by user ID or mobile)
+        const isOwner = booking.user?.toString() === userId || booking.mobile === (user.phone || user.mobile);
+        if (!isOwner) {
+            return res.status(403).json({ success: false, message: 'You are not authorized to cancel this order' });
+        }
+
+        // Only allow cancellation of 'Pending' orders
+        if (booking.status.toLowerCase() !== 'pending') {
+            return res.status(400).json({ success: false, message: `Cannot cancel an order that is already ${booking.status}` });
+        }
+
+        booking.status = 'Cancelled';
+        await booking.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Order cancelled successfully',
+            data: booking
+        });
+    } catch (error) {
+        console.error("CANCEL ORDER ERROR:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Get unified activity history for user
+ * @route   GET /api/users/history
+ */
+exports.getUserHistory = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const user = await User.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const Booking = require('../models/Booking');
+        
+        // Fetch real data
+        const query = {
+            $or: [
+                { user: userId },
+                { mobile: user.phone || user.mobile }
+            ]
+        };
+        const bookings = await Booking.find(query).sort({ createdAt: -1 });
+
+        const history = [];
+
+        // 1. Process Bookings as Orders and Payments
+        bookings.forEach(b => {
+            const dateStr = new Date(b.createdAt).toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            });
+            const timeStr = new Date(b.createdAt).toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            // Add as Order record
+            history.push({
+                id: `ORD${b._id.toString().substring(18)}`.toUpperCase(),
+                dbId: b._id,
+                type: 'order',
+                action: `Order ${b.status}`,
+                description: b.pujaType || 'Booking',
+                date: dateStr,
+                time: timeStr,
+                status: b.status.toLowerCase(),
+                amount: b.amount || 0,
+                details: {
+                    orderId: b._id.toString().substring(0, 8).toUpperCase(),
+                    location: b.city || 'N/A',
+                    paymentMethod: b.paymentMethod || 'Razorpay'
+                },
+                timestamp: b.createdAt
+            });
+
+            // Add as Payment record if successful
+            if (b.paymentStatus === 'paid' || b.status !== 'Pending') {
+                history.push({
+                    id: `PAY${b._id.toString().substring(18)}`.toUpperCase(),
+                    dbId: b._id,
+                    type: 'payment',
+                    action: b.status === 'Cancelled' ? 'Refund Processed' : 'Payment Success',
+                    description: b.pujaType || 'Service Payment',
+                    date: dateStr,
+                    time: timeStr,
+                    status: b.status === 'Cancelled' ? 'refunded' : 'success',
+                    amount: b.amount || 0,
+                    details: {
+                        transactionId: `TXN${b._id.toString().substring(15)}`.toUpperCase(),
+                        method: b.paymentMethod || 'Razorpay',
+                    },
+                    timestamp: new Date(b.createdAt.getTime() + 1000) // Slight offset for sorting
+                });
+            }
+        });
+
+        // 2. Process Login History
+        if (user.loginHistory && user.loginHistory.length > 0) {
+            user.loginHistory.forEach((login, idx) => {
+                const loginDate = new Date(login.timestamp);
+                const dateStr = loginDate.toLocaleDateString('en-GB', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric'
+                });
+                const timeStr = loginDate.toLocaleTimeString('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+
+                history.push({
+                    id: `LOG${idx}${userId.substring(20)}`.toUpperCase(),
+                    type: 'login',
+                    action: idx === 0 ? 'Current Session' : 'Login Activity',
+                    description: login.device || 'Unknown Device',
+                    date: dateStr,
+                    time: timeStr,
+                    status: idx === 0 ? 'current' : 'completed',
+                    details: {
+                        device: login.device,
+                        location: login.location || 'India',
+                        ip: login.ip || '0.0.0.0'
+                    },
+                    timestamp: login.timestamp
+                });
+            });
+        }
+
+        // 3. Add Account Creation (Profile type)
+        history.push({
+            id: `ACC${userId.substring(20)}`.toUpperCase(),
+            type: 'profile',
+            action: 'Account Created',
+            description: 'Joined Acharya Ji',
+            date: new Date(user.createdAt).toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            }),
+            time: new Date(user.createdAt).toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit'
+            }),
+            status: 'completed',
+            details: {
+                message: 'Welcome to the spiritual journey!'
+            },
+            timestamp: user.createdAt
+        });
+
+        // Sort entire history by timestamp descending
+        const sortedHistory = history.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        res.status(200).json({
+            success: true,
+            data: sortedHistory
+        });
+    } catch (error) {
+        console.error("HISTORY ERROR:", error.message);
         res.status(500).json({ success: false, message: error.message });
     }
 };

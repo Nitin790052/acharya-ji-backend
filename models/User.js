@@ -38,13 +38,25 @@ const UserSchema = new mongoose.Schema({
   membershipType: { type: String, default: 'Free Member' },
   walletBalance: { type: Number, default: 0 },
   avatar: String,
-  location: String,
-  
-  // Activity metrics
-  totalBookings: { type: Number, default: 0 },
-  totalOrders: { type: Number, default: 0 },
-  totalSpend: { type: Number, default: 0 },
+  address: String,
+  notificationSettings: {
+    emailNotifications: { type: Boolean, default: true },
+    smsNotifications: { type: Boolean, default: true },
+    whatsAppUpdates: { type: Boolean, default: false },
+    promotionalEmails: { type: Boolean, default: true },
+    bookingReminders: { type: Boolean, default: true },
+    paymentAlerts: { type: Boolean, default: true },
+    newsletter: { type: Boolean, default: false }
+  },
+  language: { type: String, default: 'English (India)' },
+  theme: { type: String, default: 'light' },
   lastActive: { type: Date, default: Date.now },
+  loginHistory: [{
+    device: String,
+    location: String,
+    ip: String,
+    timestamp: { type: Date, default: Date.now }
+  }],
   
   createdAt: {
     type: Date,
@@ -53,9 +65,9 @@ const UserSchema = new mongoose.Schema({
 });
 
 // Encrypt password using bcrypt
-UserSchema.pre('save', async function(next) {
+UserSchema.pre('save', async function() {
   if (!this.isModified('password')) {
-    next();
+    return;
   }
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
