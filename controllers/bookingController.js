@@ -28,7 +28,24 @@ exports.getSingleBooking = async (req, res) => {
 exports.createBooking = async (req, res) => {
     try {
         console.log('Incoming Booking Request:', JSON.stringify(req.body, null, 2));
-        const newBooking = new Booking(req.body);
+        
+        const bookingData = { ...req.body };
+
+        // Attach user if logged in
+        if (req.user && req.user.id) {
+            bookingData.user = req.user.id;
+        }
+
+        // If amount is missing, try to fetch it from the offering
+        if (!bookingData.amount) {
+            const PujaOffering = require('../models/PujaOffering');
+            const offering = await PujaOffering.findOne({ title: bookingData.pujaType });
+            if (offering) {
+                bookingData.amount = offering.price;
+            }
+        }
+
+        const newBooking = new Booking(bookingData);
         const savedBooking = await newBooking.save();
         res.status(201).json(savedBooking);
     } catch (error) {

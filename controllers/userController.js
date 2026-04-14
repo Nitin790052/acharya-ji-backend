@@ -373,9 +373,40 @@ exports.getUserDashboard = async (req, res) => {
         const allBookings = await Booking.find(query);
         const totalSpent = allBookings.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
 
-        console.log(`DASHBOARD: Found ${totalBookings} total bookings for query:`, JSON.stringify(query));
+        // Calculate total pending amount with fallback for older bookings
+        const PujaOffering = require('../models/PujaOffering');
+        const offerings = await PujaOffering.find({}, 'title price');
+        const priceMap = offerings.reduce((map, o) => ({ ...map, [o.title]: o.price }), {});
 
-        // Dashboard Metrics (Aggregated with dynamic data)
+        const pendingAmount = allBookings
+            .filter(b => {
+                const isStatusPending = b.paymentStatus === 'pending' || !b.paymentStatus;
+                const isJobActive = ['Pending', 'Confirmed'].includes(b.status);
+                return isStatusPending && isJobActive && b.status !== 'Cancelled';
+            })
+            .reduce((sum, b) => {
+                const amount = Number(b.amount) || priceMap[b.pujaType] || 0;
+                return sum + amount;
+            }, 0);
+        
+        // Find latest successful payment
+        const lastPaidBooking = await Booking.findOne({ ...query, paymentStatus: 'paid' }).sort({ createdAt: -1 });
+        
+        const latestPayment = lastPaidBooking ? {
+            status: 'success',
+            amount: `₹${lastPaidBooking.amount || 0}`,
+            method: lastPaidBooking.paymentMethod || 'Razorpay',
+            date: new Date(lastPaidBooking.createdAt).toLocaleDateString('en-GB'),
+            time: new Date(lastPaidBooking.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        } : {
+            status: 'pending',
+            amount: '₹0',
+            method: 'N/A',
+            date: 'N/A',
+            time: 'N/A'
+        };
+
+        // Dashboard Metrics
         const summary = [
             { id: 1, label: 'Total Orders', value: totalBookings, growth: '+0', type: 'order' },
             { id: 2, label: 'Pending Bookings', value: pendingBookings, growth: `${pendingBookings} items`, type: 'history' },
@@ -386,13 +417,13 @@ exports.getUserDashboard = async (req, res) => {
 
         const recentOrders = userBookings.map(b => ({
             id: b._id.toString().substring(0, 8).toUpperCase(),
+            originalId: b._id,
             service: b.pujaType,
             date: new Date(b.createdAt).toLocaleDateString('en-GB'),
             status: b.status.toLowerCase(),
             amount: b.amount ? `₹${b.amount}` : '₹0'
         }));
 
-        console.log(`Sending dashboard data for: ${user.name}`);
         res.status(200).json({
             success: true,
             data: {
@@ -403,7 +434,8 @@ exports.getUserDashboard = async (req, res) => {
                     lastLogin: user.loginHistory && user.loginHistory.length > 1 
                         ? user.loginHistory[1] 
                         : (user.createdAt ? { timestamp: user.createdAt, device: 'First Login', location: 'Account created' } : 'Just now'),
-                    memberSince: user.createdAt ? new Date(user.createdAt).getFullYear() : '2023'
+                    memberSince: user.createdAt ? new Date(user.createdAt).getFullYear() : '2023',
+                    walletBalance: user.walletBalance || 0
                 },
                 summary,
                 recentOrders,
@@ -411,13 +443,8 @@ exports.getUserDashboard = async (req, res) => {
                     { id: 1, message: 'Welcome to your new dashboard!', time: 'Recently', unread: true, type: 'reminder' },
                     { id: 2, message: 'Your spiritual journey begins here.', time: 'Always', unread: false, type: 'offer' }
                 ],
-                latestPayment: {
-                    status: 'success',
-                    amount: '₹0',
-                    method: 'Razorpay',
-                    date: 'N/A',
-                    time: 'N/A'
-                }
+                latestPayment,
+                totalPendingAmount: pendingAmount
             }
         });
     } catch (error) {
@@ -469,13 +496,15 @@ exports.getUserOrders = async (req, res) => {
             }),
             serviceName: b.pujaType || 'Service',
             customerName: b.name || user.name,
+            customerMobile: b.mobile || user.phone || user.mobile || 'N/A',
             status: b.status.toLowerCase(),
             paymentStatus: b.paymentStatus || 'pending',
             amount: b.amount || 0,
             paymentMethod: b.paymentMethod || 'Razorpay',
             priest: b.priest || 'Assigned Soon',
-            location: b.city || 'TBD',
-            type: b.mode ? (b.mode === 'Online' ? 'online' : 'offline') : 'online'
+            location: b.city || b.location || 'N/A',
+            type: b.mode ? (b.mode === 'Online' ? 'online' : 'offline') : 'online',
+            transactionId: b.transactionId || `TXN${b._id.toString().substring(18).toUpperCase()}`
         }));
 
         res.status(200).json({
@@ -777,6 +806,75 @@ exports.getUserHistory = async (req, res) => {
         });
     } catch (error) {
         console.error("HISTORY ERROR:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Add money to user wallet
+ * @route   POST /api/users/add-money
+ * @access  Private
+ */
+exports.addMoney = async (req, res) => {
+    try {
+        const { amount } = req.body;
+        const userId = req.user.id;
+
+        if (!amount || isNaN(amount) || amount <= 0) {
+            return res.status(400).json({ success: false, message: 'Invalid amount' });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        user.walletBalance = (user.walletBalance || 0) + Number(amount);
+        await user.save();
+
+        res.status(200).json({
+            success: true,
+            message: `₹${amount} added successfully to your wallet!`,
+            walletBalance: user.walletBalance
+        });
+    } catch (error) {
+        console.error("ADD MONEY ERROR:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Pay all pending bookings
+ * @route   POST /api/users/pay-all-pending
+ * @access  Private
+ */
+exports.payAllPending = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const user = await User.findById(userId);
+        
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const Booking = require('../models/Booking');
+        const query = {
+            $and: [
+                { $or: [{ user: userId }, { mobile: user.phone || user.mobile }] },
+                { $or: [{ paymentStatus: 'pending' }, { paymentStatus: { $exists: false } }] }
+            ],
+            status: { $ne: 'Cancelled' }
+        };
+
+        const result = await Booking.updateMany(query, { paymentStatus: 'paid' });
+
+        res.status(200).json({
+            success: true,
+            message: `✅ Successfully paid for ${result.modifiedCount} pending bookings!`,
+            modifiedCount: result.modifiedCount
+        });
+    } catch (error) {
+        console.error("PAY PENDING ERROR:", error.message);
         res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -41,6 +41,8 @@ router.get('/profile', protect, userController.getProfile);
 router.put('/profile', protect, userController.updateProfile);
 router.put('/change-password', protect, userController.updatePassword);
 router.post('/upload-avatar', protect, upload.single('avatar'), userController.uploadAvatar);
+router.post('/add-money', protect, userController.addMoney);
+router.post('/pay-all-pending', protect, userController.payAllPending);
 
 // Standard user management routes
 router.get('/', userController.getUsers);
