@@ -213,7 +213,8 @@ exports.sendOtp = async (req, res) => {
         res.status(200).json({
             success: true,
             message: `OTP sent to your ${type}`,
-            debugOtp: process.env.NODE_ENV === 'development' ? otp : undefined
+            // TODO: Remove debugOtp before going live — temporary for testing
+            debugOtp: otp
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -485,6 +486,10 @@ exports.getUserOrders = async (req, res) => {
         const bookings = await Booking.find(query).sort({ createdAt: -1 });
         console.log(`ORDERS: Found ${bookings.length} bookings for status: ${status || 'all'}. Query:`, JSON.stringify(query));
 
+        const PujaOffering = require('../models/PujaOffering');
+        const offerings = await PujaOffering.find({}, 'title price');
+        const priceMap = offerings.reduce((map, o) => ({ ...map, [o.title]: o.price }), {});
+
         // Map to frontend structure
         const formattedOrders = bookings.map(b => ({
             id: b._id.toString().substring(0, 8).toUpperCase(),
@@ -499,7 +504,7 @@ exports.getUserOrders = async (req, res) => {
             customerMobile: b.mobile || user.phone || user.mobile || 'N/A',
             status: b.status.toLowerCase(),
             paymentStatus: b.paymentStatus || 'pending',
-            amount: b.amount || 0,
+            amount: Number(b.amount) || priceMap[b.pujaType] || 0,
             paymentMethod: b.paymentMethod || 'Razorpay',
             priest: b.priest || 'Assigned Soon',
             location: b.city || b.location || 'N/A',
@@ -866,12 +871,51 @@ exports.payAllPending = async (req, res) => {
             status: { $ne: 'Cancelled' }
         };
 
-        const result = await Booking.updateMany(query, { paymentStatus: 'paid' });
+        // Determine the total pending amount to deduct from wallet
+        const bookingsToPay = await Booking.find(query);
+        let amountToDeduct = 0;
+        
+        if (bookingsToPay.length > 0) {
+            const PujaOffering = require('../models/PujaOffering');
+            const offerings = await PujaOffering.find({}, 'title price');
+            const priceMap = offerings.reduce((map, o) => ({ ...map, [o.title]: o.price }), {});
+
+            bookingsToPay.forEach(b => {
+                // Ignore bookings that are not active jobs
+                const isJobActive = ['Pending', 'Confirmed'].includes(b.status);
+                if (isJobActive) {
+                    const amt = Number(b.amount) || priceMap[b.pujaType] || 0;
+                    amountToDeduct += amt;
+                }
+            });
+        }
+
+        // Prevent wallet deducting if there isn't actually anything to pay or it's free
+        if (amountToDeduct > 0) {
+            // Check if user has sufficient wallet balance (optional, but ensures they don't go negative if we strictly enforce wallet)
+            // If the app allows negative wallet balance or overrides it, we simply deduct.
+            user.walletBalance = Math.max(0, (user.walletBalance || 0) - amountToDeduct);
+            await user.save();
+        }
+
+        // 1. Update orders that are currently Pending to Confirmed and their payment status to Paid
+        const result1 = await Booking.updateMany(
+            { ...query, status: 'Pending' }, 
+            { paymentStatus: 'paid', status: 'Confirmed' }
+        );
+
+        // 2. Update orders that are already Confirmed or Completed to simply Paid
+        const result2 = await Booking.updateMany(
+            { ...query, status: { $ne: 'Pending' } }, 
+            { paymentStatus: 'paid' }
+        );
+
+        const totalModified = result1.modifiedCount + result2.modifiedCount;
 
         res.status(200).json({
             success: true,
-            message: `✅ Successfully paid for ${result.modifiedCount} pending bookings!`,
-            modifiedCount: result.modifiedCount
+            message: `✅ Successfully paid and confirmed for ${totalModified} pending bookings!`,
+            modifiedCount: totalModified
         });
     } catch (error) {
         console.error("PAY PENDING ERROR:", error.message);
