@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Booking = require('../models/Booking');
 const Otp = require('../models/Otp');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -31,10 +32,55 @@ exports.getUsers = async (req, res) => {
 
         const skip = (page - 1) * limit;
 
-        const users = await User.find(query)
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        const users = await User.aggregate([
+            { $match: query },
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: parseInt(limit) },
+            {
+                $lookup: {
+                    from: 'bookings',
+                    let: { userId: '$_id', userPhone: '$phone' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $or: [
+                                        { $eq: ['$user', '$$userId'] },
+                                        { $eq: [{ $toObjectId: '$user' }, '$$userId'] },
+                                        { $eq: ['$mobile', '$$userPhone'] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'userBookings'
+                }
+            },
+            {
+                $addFields: {
+                    totalBookings: { $size: '$userBookings' },
+                    totalOrders: { $size: '$userBookings' },
+                    totalSpend: {
+                        $sum: {
+                            $map: {
+                                input: '$userBookings',
+                                as: 'fb',
+                                in: { $toDouble: { $ifNull: ['$$fb.amount', 0] } }
+                            }
+                        }
+                    },
+                    regDate: '$createdAt'
+                }
+            },
+            { $project: { userBookings: 0, password: 0 } }
+        ]);
+
+        console.log(`[getUsers] Found ${users.length} users. First user stats:`, users[0] ? {
+            name: users[0].name,
+            totalBookings: users[0].totalBookings,
+            totalSpend: users[0].totalSpend
+        } : 'None');
 
         const total = await User.countDocuments(query);
 
@@ -85,11 +131,58 @@ exports.getUserStats = async (req, res) => {
  */
 exports.getUserById = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
-        if (!user) {
+        const mongoose = require('mongoose');
+        const users = await User.aggregate([
+            { $match: { _id: new mongoose.Types.ObjectId(req.params.id) } },
+            {
+                $lookup: {
+                    from: 'bookings',
+                    let: { userId: '$_id', userPhone: '$phone' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $or: [
+                                        { $eq: ['$user', '$$userId'] },
+                                        { $eq: [{ $toObjectId: '$user' }, '$$userId'] },
+                                        { $eq: ['$mobile', '$$userPhone'] }
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    as: 'userBookings'
+                }
+            },
+            {
+                $addFields: {
+                    totalBookings: { $size: '$userBookings' },
+                    totalOrders: { $size: '$userBookings' },
+                    totalSpend: {
+                        $sum: {
+                            $map: {
+                                input: '$userBookings',
+                                as: 'fb',
+                                in: { $toDouble: { $ifNull: ['$$fb.amount', 0] } }
+                            }
+                        }
+                    },
+                    regDate: '$createdAt'
+                }
+            },
+            { $project: { userBookings: 0, password: 0 } }
+        ]);
+
+        console.log(`[getUserById] Aggregation result for ${req.params.id}:`, users[0] ? {
+            name: users[0].name,
+            totalBookings: users[0].totalBookings,
+            totalSpend: users[0].totalSpend
+        } : 'Not Found');
+
+        if (!users || users.length === 0) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
-        res.status(200).json({ success: true, data: user });
+        res.status(200).json({ success: true, data: users[0] });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -254,12 +347,20 @@ exports.registerUser = async (req, res) => {
             return res.status(400).json({ success: false, message: 'User already exists' });
         }
 
+        let avatar = '';
+        if (req.file) {
+            const { convertToWebp } = require('../utils/imageUtils');
+            const webpPath = await convertToWebp(req.file.path);
+            avatar = `/${webpPath.replace(/\\/g, '/')}`;
+        }
+
         const user = await User.create({
             name,
             email,
             phone,
             password,
-            location,
+            address: location,
+            avatar,
             role: 'user',
             status: 'active'
         });
@@ -277,10 +378,10 @@ exports.registerUser = async (req, res) => {
 exports.loginUser = async (req, res) => {
     try {
         const { email, phone, password, loginType, identifier } = req.body;
-        
+
         // Robust identifier selection
         const loginId = identifier || email || phone;
-        
+
         if (!loginId) {
             return res.status(400).json({ success: false, message: 'Please provide email or phone' });
         }
@@ -317,13 +418,13 @@ exports.loginUser = async (req, res) => {
         let device = 'Desktop';
         if (/mobile/i.test(userAgent)) device = 'Mobile';
         if (/tablet/i.test(userAgent)) device = 'Tablet';
-        
+
         user.lastActive = new Date();
         if (!user.loginHistory) user.loginHistory = [];
-        
+
         user.loginHistory.unshift({
             device: `${device} (${userAgent.split(' ')[0]})`,
-            location: 'Noida, India', 
+            location: 'Noida, India',
             ip: req.ip,
             timestamp: new Date()
         });
@@ -348,33 +449,54 @@ exports.loginUser = async (req, res) => {
 exports.getUserDashboard = async (req, res) => {
     try {
         const userId = req.user.id;
-        console.log(`Fetching dashboard for User ID: ${userId}`);
+        const { period = 'week' } = req.query;
+        console.log(`Fetching dashboard for User ID: ${userId}, Period: ${period}`);
 
         const user = await User.findById(userId);
         if (!user) {
-            console.log(`User not found for ID: ${userId}`);
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
         const Booking = require('../models/Booking');
-        
-        // Flexible query: User ID OR matching Mobile Number
-        const query = {
+
+        // Calculate date range based on period
+        let dateQuery = {};
+        const now = new Date();
+        const startOfToday = new Date(new Date().setHours(0, 0, 0, 0));
+
+        if (period === 'day') {
+            dateQuery = { createdAt: { $gte: startOfToday } };
+        } else if (period === 'week') {
+            const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            dateQuery = { createdAt: { $gte: lastWeek } };
+        } else if (period === 'month') {
+            const lastMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            dateQuery = { createdAt: { $gte: lastMonth } };
+        }
+
+        // Flexible user query
+        const baseQuery = {
             $or: [
                 { user: userId },
                 { mobile: user.phone || user.mobile }
             ]
         };
 
-        const userBookings = await Booking.find(query).sort({ createdAt: -1 }).limit(10);
-        const totalBookings = await Booking.countDocuments(query);
-        const pendingBookings = await Booking.countDocuments({ ...query, status: 'Pending' });
-        
-        // Calculate Total Spending
-        const allBookings = await Booking.find(query);
-        const totalSpent = allBookings.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+        // Filtered query for period-based metrics
+        const filteredQuery = { ...baseQuery, ...dateQuery };
 
-        // Calculate total pending amount with fallback for older bookings
+        // 1. Total Orders in period
+        const totalBookings = await Booking.countDocuments(filteredQuery);
+
+        // 2. Pending Bookings in period
+        const pendingBookings = await Booking.countDocuments({ ...filteredQuery, status: 'Pending' });
+
+        // 3. Total Spending in period
+        const periodBookings = await Booking.find(filteredQuery);
+        const periodSpent = (periodBookings || []).reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+
+        // Calculate total pending amount (all time)
+        const allBookings = await Booking.find(baseQuery);
         const PujaOffering = require('../models/PujaOffering');
         const offerings = await PujaOffering.find({}, 'title price');
         const priceMap = offerings.reduce((map, o) => ({ ...map, [o.title]: o.price }), {});
@@ -389,10 +511,10 @@ exports.getUserDashboard = async (req, res) => {
                 const amount = Number(b.amount) || priceMap[b.pujaType] || 0;
                 return sum + amount;
             }, 0);
-        
-        // Find latest successful payment
-        const lastPaidBooking = await Booking.findOne({ ...query, paymentStatus: 'paid' }).sort({ createdAt: -1 });
-        
+
+        // Find latest successful payment (all time)
+        const lastPaidBooking = await Booking.findOne({ ...baseQuery, paymentStatus: 'paid' }).sort({ createdAt: -1 });
+
         const latestPayment = lastPaidBooking ? {
             status: 'success',
             amount: `₹${lastPaidBooking.amount || 0}`,
@@ -407,15 +529,24 @@ exports.getUserDashboard = async (req, res) => {
             time: 'N/A'
         };
 
+        // Growth labels based on period
+        const growthLabels = {
+            day: 'Today',
+            week: 'This Week',
+            month: 'This Month'
+        };
+
         // Dashboard Metrics
         const summary = [
-            { id: 1, label: 'Total Orders', value: totalBookings, growth: '+0', type: 'order' },
+            { id: 1, label: 'Total Orders', value: totalBookings, growth: `+${totalBookings} ${growthLabels[period]}`, type: 'order' },
             { id: 2, label: 'Pending Bookings', value: pendingBookings, growth: `${pendingBookings} items`, type: 'history' },
-            { id: 3, label: 'Total Spending', value: `₹${totalSpent}`, growth: '+₹0', type: 'payment' },
-            { id: 4, label: 'Wallet Balance', value: `₹${user.walletBalance || 0}`, growth: '+₹0', type: 'wallet' },
+            { id: 3, label: 'Total Spending', value: `₹${periodSpent}`, growth: `+₹${periodSpent}`, type: 'payment' },
+            { id: 4, label: 'Wallet Balance', value: `₹${user.walletBalance || 0}`, growth: 'Current', type: 'wallet' },
             { id: 5, label: 'Membership Status', value: user.membershipType || 'Free', growth: 'Active', type: 'membership' }
         ];
 
+        // Recent 30 Orders (all time) to support dashboard pagination
+        const userBookings = await Booking.find(baseQuery).sort({ createdAt: -1 }).limit(30);
         const recentOrders = userBookings.map(b => ({
             id: b._id.toString().substring(0, 8).toUpperCase(),
             originalId: b._id,
@@ -425,6 +556,46 @@ exports.getUserDashboard = async (req, res) => {
             amount: b.amount ? `₹${b.amount}` : '₹0'
         }));
 
+        // Generate dynamic notifications based on data
+        const notifications = [];
+
+        if (pendingAmount > 0) {
+            notifications.push({
+                id: 'pay-pending',
+                message: `You have ₹${pendingAmount} pending payment for your bookings.`,
+                time: 'Recently',
+                unread: true,
+                type: 'payment'
+            });
+        }
+
+        // Add a notification for EVERY booking created in the last 10 minutes
+        userBookings.forEach((b) => {
+            const orderDate = new Date(b.createdAt);
+            const diffInMinutes = (now - orderDate) / (1000 * 60);
+
+            if (diffInMinutes < 10) {
+                notifications.push({
+                    id: `booking-${b._id}`,
+                    message: `New booking: ${b.pujaType} is ${b.status}`,
+                    time: diffInMinutes < 1 ? 'Just now' : `${Math.floor(diffInMinutes)}m ago`,
+                    unread: true,
+                    type: 'reminder'
+                });
+            }
+        });
+
+        // Add a general welcome/offer if it's a relatively new account or just as a placeholder
+        if (notifications.length === 0) {
+            notifications.push({
+                id: 'welcome-tip',
+                message: 'Welcome! Explore our premium spiritual services.',
+                time: 'A while ago',
+                unread: false,
+                type: 'offer'
+            });
+        }
+
         res.status(200).json({
             success: true,
             data: {
@@ -432,18 +603,16 @@ exports.getUserDashboard = async (req, res) => {
                     name: user.name,
                     email: user.email,
                     membershipType: user.membershipType || 'Free Member',
-                    lastLogin: user.loginHistory && user.loginHistory.length > 1 
-                        ? user.loginHistory[1] 
+                    lastLogin: user.loginHistory && user.loginHistory.length > 1
+                        ? user.loginHistory[1]
                         : (user.createdAt ? { timestamp: user.createdAt, device: 'First Login', location: 'Account created' } : 'Just now'),
                     memberSince: user.createdAt ? new Date(user.createdAt).getFullYear() : '2023',
                     walletBalance: user.walletBalance || 0
                 },
                 summary,
                 recentOrders,
-                notifications: [
-                    { id: 1, message: 'Welcome to your new dashboard!', time: 'Recently', unread: true, type: 'reminder' },
-                    { id: 2, message: 'Your spiritual journey begins here.', time: 'Always', unread: false, type: 'offer' }
-                ],
+                notifications,
+                unreadMessagesCount: 2, // Placeholder for now
                 latestPayment,
                 totalPendingAmount: pendingAmount
             }
@@ -469,7 +638,7 @@ exports.getUserOrders = async (req, res) => {
         }
 
         const Booking = require('../models/Booking');
-        
+
         // Build flexible query (match by user ID OR phone number)
         const query = {
             $or: [
@@ -546,7 +715,7 @@ exports.getProfile = async (req, res) => {
 exports.updateProfile = async (req, res) => {
     try {
         const { name, phone, address, avatar, notificationSettings, language, theme } = req.body;
-        
+
         const updateData = {};
         if (name) updateData.name = name;
         if (phone) updateData.phone = phone;
@@ -677,6 +846,7 @@ exports.cancelOrder = async (req, res) => {
 exports.getUserHistory = async (req, res) => {
     try {
         const userId = req.user.id;
+        const { period = 'all' } = req.query;
         const user = await User.findById(userId);
 
         if (!user) {
@@ -684,12 +854,37 @@ exports.getUserHistory = async (req, res) => {
         }
 
         const Booking = require('../models/Booking');
-        
-        // Fetch real data
+
+        // Calculate date range based on period
+        let dateQuery = {};
+        if (period !== 'all') {
+            const now = new Date();
+            const startOfToday = new Date(new Date().setHours(0, 0, 0, 0));
+
+            if (period === 'day') {
+                dateQuery = { createdAt: { $gte: startOfToday } };
+            } else if (period === 'week') {
+                const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                dateQuery = { createdAt: { $gte: lastWeek } };
+            } else if (period === 'month') {
+                const lastMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                dateQuery = { createdAt: { $gte: lastMonth } };
+            } else if (period === 'year') {
+                const lastYear = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+                dateQuery = { createdAt: { $gte: lastYear } };
+            }
+        }
+
+        // Fetch real data with date filter
         const query = {
-            $or: [
-                { user: userId },
-                { mobile: user.phone || user.mobile }
+            $and: [
+                {
+                    $or: [
+                        { user: userId },
+                        { mobile: user.phone || user.mobile }
+                    ]
+                },
+                dateQuery
             ]
         };
         const bookings = await Booking.find(query).sort({ createdAt: -1 });
@@ -752,6 +947,11 @@ exports.getUserHistory = async (req, res) => {
         if (user.loginHistory && user.loginHistory.length > 0) {
             user.loginHistory.forEach((login, idx) => {
                 const loginDate = new Date(login.timestamp);
+
+                // Filter login history if a period is selected
+                if (dateQuery.createdAt && loginDate < dateQuery.createdAt.$gte) {
+                    return;
+                }
                 const dateStr = loginDate.toLocaleDateString('en-GB', {
                     day: '2-digit',
                     month: 'short',
@@ -781,26 +981,29 @@ exports.getUserHistory = async (req, res) => {
         }
 
         // 3. Add Account Creation (Profile type)
-        history.push({
-            id: `ACC${userId.substring(20)}`.toUpperCase(),
-            type: 'profile',
-            action: 'Account Created',
-            description: 'Joined Acharya Ji',
-            date: new Date(user.createdAt).toLocaleDateString('en-GB', {
-                day: '2-digit',
-                month: 'short',
-                year: 'numeric'
-            }),
-            time: new Date(user.createdAt).toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit'
-            }),
-            status: 'completed',
-            details: {
-                message: 'Welcome to the spiritual journey!'
-            },
-            timestamp: user.createdAt
-        });
+        const accountDate = new Date(user.createdAt);
+        if (!dateQuery.createdAt || accountDate >= dateQuery.createdAt.$gte) {
+            history.push({
+                id: `ACC${userId.substring(20)}`.toUpperCase(),
+                type: 'profile',
+                action: 'Account Created',
+                description: 'Joined Acharya Ji',
+                date: accountDate.toLocaleDateString('en-GB', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric'
+                }),
+                time: accountDate.toLocaleTimeString('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                }),
+                status: 'completed',
+                details: {
+                    message: 'Welcome to the spiritual journey!'
+                },
+                timestamp: user.createdAt
+            });
+        }
 
         // Sort entire history by timestamp descending
         const sortedHistory = history.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -857,7 +1060,7 @@ exports.payAllPending = async (req, res) => {
     try {
         const userId = req.user.id;
         const user = await User.findById(userId);
-        
+
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
@@ -874,7 +1077,7 @@ exports.payAllPending = async (req, res) => {
         // Determine the total pending amount to deduct from wallet
         const bookingsToPay = await Booking.find(query);
         let amountToDeduct = 0;
-        
+
         if (bookingsToPay.length > 0) {
             const PujaOffering = require('../models/PujaOffering');
             const offerings = await PujaOffering.find({}, 'title price');
@@ -900,13 +1103,13 @@ exports.payAllPending = async (req, res) => {
 
         // 1. Update orders that are currently Pending to Confirmed and their payment status to Paid
         const result1 = await Booking.updateMany(
-            { ...query, status: 'Pending' }, 
+            { ...query, status: 'Pending' },
             { paymentStatus: 'paid', status: 'Confirmed' }
         );
 
         // 2. Update orders that are already Confirmed or Completed to simply Paid
         const result2 = await Booking.updateMany(
-            { ...query, status: { $ne: 'Pending' } }, 
+            { ...query, status: { $ne: 'Pending' } },
             { paymentStatus: 'paid' }
         );
 
@@ -919,6 +1122,114 @@ exports.payAllPending = async (req, res) => {
         });
     } catch (error) {
         console.error("PAY PENDING ERROR:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Pay individual pending booking
+ * @route   POST /api/users/orders/:id/pay
+ * @access  Private
+ */
+exports.payOrder = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const bookingId = req.params.id;
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const Booking = require('../models/Booking');
+        const booking = await Booking.findById(bookingId);
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: 'Booking not found' });
+        }
+
+        // Verify Ownership (either by user ID or mobile)
+        const isOwner = booking.user && booking.user.toString() === userId.toString();
+        const isMobileMatch = booking.mobile === (user.phone || user.mobile);
+
+        if (!isOwner && !isMobileMatch) {
+            return res.status(403).json({ success: false, message: 'Unauthorized to pay for this booking' });
+        }
+
+        if (booking.paymentStatus === 'paid' && booking.status !== 'Pending') {
+            return res.status(400).json({ success: false, message: 'Booking is already paid' });
+        }
+
+        // Calculate Amount (Fallback to PujaOffering if not in booking)
+        let amount = Number(booking.amount);
+        if (!amount) {
+            const PujaOffering = require('../models/PujaOffering');
+            const offering = await PujaOffering.findOne({ title: booking.pujaType });
+            amount = offering ? offering.price : 0;
+        }
+
+        // Deduct from wallet
+        if (amount > 0) {
+            user.walletBalance = Math.max(0, (user.walletBalance || 0) - amount);
+            await user.save();
+        }
+
+        // Update Booking
+        booking.paymentStatus = 'paid';
+        if (booking.status === 'Pending') {
+            booking.status = 'Confirmed';
+        }
+        await booking.save();
+
+        res.status(200).json({
+            success: true,
+            message: `✅ Payment of ₹${amount} successful! Order ${booking.status}.`,
+            data: booking
+        });
+    } catch (error) {
+        console.error("PAY ORDER ERROR:", error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * @desc    Delete an order
+ * @route   DELETE /api/users/orders/:id
+ * @access  Private
+ */
+exports.deleteOrder = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const bookingId = req.params.id;
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const Booking = require('../models/Booking');
+        const booking = await Booking.findById(bookingId);
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: 'Booking not found' });
+        }
+
+        // Verify Ownership (either by user ID or mobile)
+        const isOwner = booking.user && booking.user.toString() === userId.toString();
+        const isMobileMatch = booking.mobile === (user.phone || user.mobile);
+
+        if (!isOwner && !isMobileMatch) {
+            return res.status(403).json({ success: false, message: 'Unauthorized to delete this booking' });
+        }
+
+        await Booking.findByIdAndDelete(bookingId);
+
+        res.status(200).json({
+            success: true,
+            message: 'Order deleted successfully'
+        });
+    } catch (error) {
+        console.error("DELETE ORDER ERROR:", error.message);
         res.status(500).json({ success: false, message: error.message });
     }
 };

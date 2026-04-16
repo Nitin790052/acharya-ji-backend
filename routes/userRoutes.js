@@ -15,7 +15,9 @@ const storage = multer.diskStorage({
         cb(null, dir);
     },
     filename: (req, file, cb) => {
-        cb(null, `user-${req.user.id}-${Date.now()}${path.extname(file.originalname)}`);
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const prefix = req.user ? `user-${req.user.id}` : 'reg';
+        cb(null, `${prefix}-${uniqueSuffix}${path.extname(file.originalname)}`);
     }
 });
 
@@ -29,13 +31,15 @@ const upload = multer({
 });
 
 // Auth and Specific Routes
-router.post('/register', userController.registerUser);
+router.post('/register', upload.single('avatar'), userController.registerUser);
 router.post('/login', userController.loginUser);
 router.post('/send-otp', userController.sendOtp);
 router.post('/verify-otp', userController.verifyOtp);
 router.get('/dashboard', protect, userController.getUserDashboard);
 router.get('/orders', protect, userController.getUserOrders);
 router.patch('/orders/:id/cancel', protect, userController.cancelOrder);
+router.delete('/orders/:id', protect, userController.deleteOrder);
+router.post('/orders/:id/pay', protect, userController.payOrder);
 router.get('/history', protect, userController.getUserHistory);
 router.get('/profile', protect, userController.getProfile);
 router.put('/profile', protect, userController.updateProfile);

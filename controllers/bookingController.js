@@ -58,6 +58,14 @@ exports.createBooking = async (req, res) => {
 // @route   PUT /api/bookings/:id
 exports.updateBooking = async (req, res) => {
     try {
+        // Auto-confirm if payment status is changed to paid
+        if (req.body.paymentStatus === 'paid' && (!req.body.status || req.body.status === 'Pending')) {
+            const booking = await Booking.findById(req.params.id);
+            if (booking && booking.status === 'Pending') {
+                req.body.status = 'Confirmed';
+            }
+        }
+
         const updatedBooking = await Booking.findByIdAndUpdate(
             req.params.id,
             req.body,
