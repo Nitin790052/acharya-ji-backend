@@ -1,4 +1,5 @@
 const VastuPageContent = require('../models/VastuPageContent');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 const SEED_DATA = [
     {
@@ -397,16 +398,28 @@ const vastuPageContentController = {
             });
 
             if (req.files && Array.isArray(req.files)) {
-                req.files.forEach(file => {
-                    if (file.fieldname === 'heroImage') data.hero = { ...data.hero, imageUrl: `/uploads/vastu/${file.filename}` };
-                    if (file.fieldname === 'aboutImage') data.about = { ...data.about, image: `/uploads/vastu/${file.filename}` };
+                // Fetch old page for cleanup
+                const oldPage = await VastuPageContent.findOne({ pageSlug: data.pageSlug });
+
+                for (const file of req.files) {
+                    if (file.fieldname === 'heroImage') {
+                        if (oldPage?.hero?.imageUrl) await deleteMedia(oldPage.hero.imageUrl);
+                        data.hero = { ...data.hero, imageUrl: file.path };
+                    }
+                    if (file.fieldname === 'aboutImage') {
+                        if (oldPage?.about?.image) await deleteMedia(oldPage.about.image);
+                        data.about = { ...data.about, image: file.path };
+                    }
                     if (file.fieldname.startsWith('serviceImage_')) {
                         const idx = parseInt(file.fieldname.split('_')[1]);
-                        if (data.servicesSection && data.servicesSection.services && data.servicesSection.services[idx]) {
-                            data.servicesSection.services[idx].image = `/uploads/vastu/${file.filename}`;
+                        if (data.servicesSection?.services?.[idx]) {
+                            if (oldPage?.servicesSection?.services?.[idx]?.image) {
+                                await deleteMedia(oldPage.servicesSection.services[idx].image);
+                            }
+                            data.servicesSection.services[idx].image = file.path;
                         }
                     }
-                });
+                }
             }
 
             const page = await VastuPageContent.findOneAndUpdate(
@@ -423,8 +436,19 @@ const vastuPageContentController = {
 
     remove: async (req, res) => {
         try {
-            const deleted = await VastuPageContent.findOneAndDelete({ pageSlug: req.params.id });
-            if (!deleted) return res.status(404).json({ message: 'Page not found' });
+            const page = await VastuPageContent.findOne({ pageSlug: req.params.id });
+            if (!page) return res.status(404).json({ message: 'Page not found' });
+            
+            // Cleanup images
+            if (page.hero?.imageUrl) await deleteMedia(page.hero.imageUrl);
+            if (page.about?.image) await deleteMedia(page.about.image);
+            if (page.servicesSection?.services) {
+                for (const s of page.servicesSection.services) {
+                    if (s.image) await deleteMedia(s.image);
+                }
+            }
+
+            await VastuPageContent.findOneAndDelete({ pageSlug: req.params.id });
             res.json({ message: 'Page deleted successfully' });
         } catch (error) {
             res.status(500).json({ message: error.message });

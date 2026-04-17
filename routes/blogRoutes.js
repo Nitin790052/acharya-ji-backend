@@ -1,32 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const ctrl = require('../controllers/blogController');
-const webpConvertMiddleware = require('../middleware/webpConvert');
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const dir = 'uploads/blogs/';
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-    },
-    filename: (req, file, cb) => cb(null, `blog-${Date.now()}${path.extname(file.originalname)}`)
-});
-const upload = multer({ 
-    storage, 
-    limits: { fileSize: 5 * 1024 * 1024 }, 
-    fileFilter: (req, file, cb) => file.mimetype.startsWith('image/') ? cb(null, true) : cb(new Error('Not an image')) 
-});
+const { uploadSingle } = require('../middleware/cloudinaryUpload');
 
 router.get('/settings', ctrl.getSettings);
 router.put('/settings', ctrl.updateSettings);
 router.get('/active', ctrl.getActive);
 router.get('/', ctrl.getAll);
 router.post('/seed', ctrl.seed);
-router.post('/', upload.single('image'), webpConvertMiddleware, ctrl.create);
-router.put('/:id', upload.single('image'), webpConvertMiddleware, ctrl.update);
+router.post('/', uploadSingle('image', 'blogs'), ctrl.create);
+router.put('/:id', uploadSingle('image', 'blogs'), ctrl.update);
 router.delete('/:id', ctrl.remove);
 
 module.exports = router;

@@ -1,7 +1,6 @@
 const Testimonial = require('../models/Testimonial');
 const TestimonialSettings = require('../models/TestimonialSettings');
-const fs = require('fs');
-const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 exports.getSettings = async (req, res) => {
     try {
@@ -37,7 +36,7 @@ exports.getActive = async (req, res) => {
 exports.create = async (req, res) => {
     try {
         const data = { ...req.body };
-        if (req.file) data.imageUrl = `/uploads/testimonials/${req.file.filename}`;
+        if (req.file) data.imageUrl = req.file.path;
         
         data.rating = Number(req.body.rating) || 5;
         data.order = Number(req.body.order) || 0;
@@ -60,11 +59,10 @@ exports.update = async (req, res) => {
         if (req.body.isActive !== undefined) doc.isActive = req.body.isActive !== 'false' && req.body.isActive !== false;
 
         if (req.file) {
-            if (doc.imageUrl && doc.imageUrl.startsWith('/uploads/')) {
-                const p = path.join(__dirname, '..', doc.imageUrl);
-                if (fs.existsSync(p)) fs.unlinkSync(p);
+            if (doc.imageUrl) {
+                await deleteMedia(doc.imageUrl);
             }
-            doc.imageUrl = `/uploads/testimonials/${req.file.filename}`;
+            doc.imageUrl = req.file.path;
         }
 
         await doc.save();
@@ -76,9 +74,8 @@ exports.remove = async (req, res) => {
     try {
         const doc = await Testimonial.findById(req.params.id);
         if (!doc) return res.status(404).json({ message: 'Not found' });
-        if (doc.imageUrl && doc.imageUrl.startsWith('/uploads/')) {
-            const p = path.join(__dirname, '..', doc.imageUrl);
-            if (fs.existsSync(p)) fs.unlinkSync(p);
+        if (doc.imageUrl) {
+            await deleteMedia(doc.imageUrl);
         }
         await Testimonial.findByIdAndDelete(req.params.id);
         res.json({ message: 'Deleted' });

@@ -1,6 +1,7 @@
-const DynamicShopProduct = require('../models/DynamicShopProduct');
+const Product = require('../models/DynamicShopProduct');
 const DynamicShopCategory = require('../models/DynamicShopCategory');
 const DynamicShopContent = require('../models/DynamicShopContent');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 // Public: Get all data for a specific shop
 exports.getShopData = async (req, res) => {
@@ -99,7 +100,7 @@ exports.addProduct = async (req, res) => {
     try {
         const body = { ...req.body };
         if (req.file) {
-            body.image = `/uploads/shop/${req.file.filename}`;
+            body.image = req.file.path;
         }
         const product = await DynamicShopProduct.create({ ...body, shopType: req.params.shopType });
         res.status(201).json({ success: true, data: product });
@@ -112,7 +113,11 @@ exports.updateProduct = async (req, res) => {
     try {
         const body = { ...req.body };
         if (req.file) {
-            body.image = `/uploads/shop/${req.file.filename}`;
+            const existing = await DynamicShopProduct.findById(req.params.id);
+            if (existing && existing.image) {
+                await deleteMedia(existing.image);
+            }
+            body.image = req.file.path;
         }
         const product = await DynamicShopProduct.findByIdAndUpdate(req.params.id, body, { returnDocument: 'after' });
         res.status(200).json({ success: true, data: product });
@@ -124,6 +129,10 @@ exports.updateProduct = async (req, res) => {
 
 exports.deleteProduct = async (req, res) => {
     try {
+        const product = await DynamicShopProduct.findById(req.params.id);
+        if (product && product.image) {
+            await deleteMedia(product.image);
+        }
         await DynamicShopProduct.findByIdAndDelete(req.params.id);
         res.status(200).json({ success: true, message: 'Product removed' });
     } catch (error) {

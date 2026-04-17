@@ -1,4 +1,5 @@
 const KundliPageContent = require('../models/KundliPageContent');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 const BASE_TEMPLATE = {
     hero: { badge: 'DIVINE SERVICES', title: 'Unlock Your', highlightedTitle: 'Destiny', subtitle: 'Discover the cosmic blueprint of your life.', imageUrl: '', buttonText: 'Explore Now', buttonLink: '/astrologer' },
@@ -168,7 +169,12 @@ const kundliPageContentController = {
             // Handle Hero Image Upload
             if (req.files && req.files.heroImage) {
                 if (!data.hero) data.hero = {};
-                data.hero.imageUrl = `/uploads/kundli/${req.files.heroImage[0].filename}`;
+                // Cleanup old hero image
+                const existing = await KundliPageContent.findOne({ pageSlug: data.pageSlug });
+                if (existing && existing.hero && existing.hero.imageUrl) {
+                    await deleteMedia(existing.hero.imageUrl);
+                }
+                data.hero.imageUrl = req.files.heroImage[0].path;
             }
 
             const page = await KundliPageContent.findOneAndUpdate(
@@ -185,8 +191,14 @@ const kundliPageContentController = {
 
     remove: async (req, res) => {
         try {
-            const deleted = await KundliPageContent.findOneAndDelete({ pageSlug: req.params.id });
-            if (!deleted) return res.status(404).json({ message: 'Page not found' });
+            const page = await KundliPageContent.findOne({ pageSlug: req.params.id });
+            if (!page) return res.status(404).json({ message: 'Page not found' });
+            
+            if (page.hero && page.hero.imageUrl) {
+                await deleteMedia(page.hero.imageUrl);
+            }
+
+            await KundliPageContent.findOneAndDelete({ pageSlug: req.params.id });
             res.json({ message: 'Page deleted successfully' });
         } catch (error) {
             res.status(500).json({ message: error.message });

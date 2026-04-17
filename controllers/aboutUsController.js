@@ -1,6 +1,6 @@
 const AboutUs = require('../models/AboutUs');
-const fs = require('fs');
 const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 const parseFeatures = (raw) => {
     if (!raw) return [];
@@ -33,7 +33,7 @@ exports.createAboutUs = async (req, res) => {
             badge, title, highlightTitle, description1, description2,
             features: parseFeatures(features),
             buttonText, buttonLink, button2Text, button2Link,
-            imageUrl: req.file ? `/uploads/about/${req.file.filename}` : ''
+            imageUrl: req.file ? req.file.path : ''
         });
         await newRecord.save();
         res.status(201).json({ message: 'About Us record created', data: newRecord });
@@ -53,10 +53,9 @@ exports.updateAboutUs = async (req, res) => {
 
         if (req.file) {
             if (existing.imageUrl) {
-                const oldImagePath = path.join(__dirname, '..', existing.imageUrl);
-                if (fs.existsSync(oldImagePath)) fs.unlinkSync(oldImagePath);
+                await deleteMedia(existing.imageUrl);
             }
-            existing.imageUrl = `/uploads/about/${req.file.filename}`;
+            existing.imageUrl = req.file.path;
         }
 
         if (badge !== undefined) existing.badge = badge;
@@ -110,10 +109,7 @@ exports.deleteAboutUs = async (req, res) => {
         if (!record) return res.status(404).json({ message: 'Record not found' });
 
         if (record.imageUrl) {
-            const imgPath = path.join(__dirname, '..', record.imageUrl);
-            if (fs.existsSync(imgPath)) {
-                try { fs.unlinkSync(imgPath); } catch (e) { console.error('Image delete error:', e); }
-            }
+            await deleteMedia(record.imageUrl);
         }
         await AboutUs.findByIdAndDelete(id);
         res.status(200).json({ message: 'About Us record deleted' });

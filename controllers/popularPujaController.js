@@ -1,7 +1,6 @@
 const PopularPuja = require('../models/PopularPuja');
 const PopularPujaSettings = require('../models/PopularPujaSettings');
-const fs = require('fs');
-const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 exports.getSettings = async (req, res) => {
     try {
@@ -53,7 +52,7 @@ exports.createPuja = async (req, res) => {
             return res.status(400).json({ message: 'Image is required' });
         }
 
-        const imageUrl = `/uploads/popularServices/${req.file.filename}`;
+        const imageUrl = req.file.path;
         const pujaData = { ...req.body, imageUrl };
 
         if (pujaData.popular !== undefined) {
@@ -75,6 +74,9 @@ exports.updatePuja = async (req, res) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
+        // Remove immutable fields to prevent Mongoose errors
+        const immutableFields = ['_id', '__v', 'createdAt', 'updatedAt', 'id'];
+        immutableFields.forEach(field => delete updates[field]);
 
         if (updates.popular !== undefined) {
             updates.popular = updates.popular === 'true' || updates.popular === true;
@@ -84,15 +86,11 @@ exports.updatePuja = async (req, res) => {
         }
 
         if (req.file) {
-            updates.imageUrl = `/uploads/popularServices/${req.file.filename}`;
-            
-            const existingPuja = await PopularPuja.findById(id);
-            if (existingPuja && existingPuja.imageUrl) {
-                const oldImagePath = path.join(__dirname, '..', existingPuja.imageUrl);
-                if (fs.existsSync(oldImagePath)) {
-                    fs.unlinkSync(oldImagePath);
-                }
+            const existing = await PopularPuja.findById(id);
+            if (existing && existing.imageUrl) {
+                await deleteMedia(existing.imageUrl);
             }
+            updates.imageUrl = req.file.path;
         }
 
         const updatedPuja = await PopularPuja.findByIdAndUpdate(id, updates, { new: true });
@@ -117,12 +115,8 @@ exports.deletePuja = async (req, res) => {
         }
 
         if (puja.imageUrl) {
-            const imagePath = path.join(__dirname, '..', puja.imageUrl);
-            if (fs.existsSync(imagePath)) {
-                fs.unlinkSync(imagePath);
-            }
+            await deleteMedia(puja.imageUrl);
         }
-
         await PopularPuja.findByIdAndDelete(id);
         res.status(200).json({ message: 'Popular Puja deleted successfully' });
     } catch (error) {

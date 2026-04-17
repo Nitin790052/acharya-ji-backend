@@ -1,7 +1,6 @@
 const VastuService = require('../models/VastuService');
 const VastuSettings = require('../models/VastuSettings');
-const fs = require('fs');
-const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 const parseArr = (val) => {
     if (Array.isArray(val)) return val;
@@ -51,7 +50,7 @@ exports.create = async (req, res) => {
         data.order = Number(req.body.order) || 0;
         const doc = await VastuService.create({
             ...data,
-            imageUrl: `/uploads/vastu/${req.file.filename}`,
+            imageUrl: req.file.path,
         });
         res.status(201).json({ message: 'Created', service: doc });
     } catch (e) { res.status(500).json({ message: e.message }); }
@@ -72,10 +71,9 @@ exports.update = async (req, res) => {
 
         if (req.file) {
             if (doc.imageUrl) {
-                const p = path.join(__dirname, '..', doc.imageUrl);
-                if (fs.existsSync(p)) fs.unlinkSync(p);
+                await deleteMedia(doc.imageUrl);
             }
-            doc.imageUrl = `/uploads/vastu/${req.file.filename}`;
+            doc.imageUrl = req.file.path;
         }
 
         await doc.save();
@@ -86,8 +84,9 @@ exports.update = async (req, res) => {
 exports.remove = async (req, res) => {
     try {
         const doc = await VastuService.findById(req.params.id);
-        if (!doc) return res.status(404).json({ message: 'Not found' });
-        if (doc.imageUrl) { const p = path.join(__dirname, '..', doc.imageUrl); if (fs.existsSync(p)) fs.unlinkSync(p); }
+        if (doc && doc.imageUrl) {
+            await deleteMedia(doc.imageUrl);
+        }
         await VastuService.findByIdAndDelete(req.params.id);
         res.json({ message: 'Deleted' });
     } catch (e) { res.status(500).json({ message: e.message }); }

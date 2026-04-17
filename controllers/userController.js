@@ -4,6 +4,7 @@ const Otp = require('../models/Otp');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sendEmail = require('../utils/sendEmail');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 // Helper to generate 6-digit OTP
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
@@ -225,10 +226,16 @@ exports.updateUserStatus = async (req, res) => {
  */
 exports.deleteUser = async (req, res) => {
     try {
-        const user = await User.findByIdAndDelete(req.params.id);
+        const user = await User.findById(req.params.id);
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
+
+        if (user.avatar) {
+            await deleteMedia(user.avatar);
+        }
+
+        await User.findByIdAndDelete(req.params.id);
         res.status(200).json({ success: true, message: 'User removed from system' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -349,9 +356,7 @@ exports.registerUser = async (req, res) => {
 
         let avatar = '';
         if (req.file) {
-            const { convertToWebp } = require('../utils/imageUtils');
-            const webpPath = await convertToWebp(req.file.path);
-            avatar = `/${webpPath.replace(/\\/g, '/')}`;
+            avatar = req.file.path; // Full Cloudinary URL
         }
 
         const user = await User.create({
@@ -602,6 +607,7 @@ exports.getUserDashboard = async (req, res) => {
                 user: {
                     name: user.name,
                     email: user.email,
+                    avatar: user.avatar || '',
                     membershipType: user.membershipType || 'Free Member',
                     lastLogin: user.loginHistory && user.loginHistory.length > 1
                         ? user.loginHistory[1]
@@ -769,19 +775,17 @@ exports.updatePassword = async (req, res) => {
  */
 exports.uploadAvatar = async (req, res) => {
     try {
-        if (!req.file) {
-            return res.status(400).json({ success: false, message: 'Please upload a file' });
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
         }
 
-        const { convertToWebp } = require('../utils/imageUtils');
-        const webpPath = await convertToWebp(req.file.path);
-        const relativePath = `/${webpPath.replace(/\\/g, '/')}`;
+        if (user.avatar) {
+            await deleteMedia(user.avatar);
+        }
 
-        const user = await User.findByIdAndUpdate(
-            req.user.id,
-            { avatar: relativePath },
-            { new: true }
-        );
+        user.avatar = req.file.path; // Full Cloudinary URL
+        await user.save();
 
         res.status(200).json({
             success: true,

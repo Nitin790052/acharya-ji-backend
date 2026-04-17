@@ -1,6 +1,6 @@
 const Service = require('../models/Service');
-const fs = require('fs');
 const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 // @desc    Get all services
 // @route   GET /api/services
@@ -30,7 +30,7 @@ exports.getActiveServices = async (req, res) => {
 // @route   POST /api/services
 exports.createService = async (req, res) => {
     try {
-        const imageUrl = req.file ? `/uploads/services/${req.file.filename}` : '';
+        const imageUrl = req.file ? req.file.path : '';
         const { title, description, href, category, icon, order } = req.body;
 
         const service = await Service.create({
@@ -63,10 +63,9 @@ exports.updateService = async (req, res) => {
         if (req.file) {
             // Delete old image
             if (service.imageUrl) {
-                const oldPath = path.join(__dirname, '..', service.imageUrl);
-                if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+                await deleteMedia(service.imageUrl);
             }
-            imageUrl = `/uploads/services/${req.file.filename}`;
+            imageUrl = req.file.path;
         }
 
         const updatedService = await Service.findByIdAndUpdate(
@@ -114,8 +113,7 @@ exports.deleteService = async (req, res) => {
         if (!service) return res.status(404).json({ message: 'Service not found' });
 
         if (service.imageUrl) {
-            const oldPath = path.join(__dirname, '..', service.imageUrl);
-            if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+            await deleteMedia(service.imageUrl);
         }
 
         await Service.findByIdAndDelete(req.params.id);

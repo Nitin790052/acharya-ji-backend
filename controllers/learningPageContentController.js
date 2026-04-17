@@ -1,4 +1,5 @@
 const LearningPageContent = require('../models/LearningPageContent');
+const { deleteMedia: cleanupMedia } = require('../utils/mediaHandlers');
 
 // Seed Initial Data
 exports.seedLearningHub = async (req, res) => {
@@ -328,7 +329,7 @@ exports.createItem = async (req, res) => {
 
         const itemData = { ...req.body };
         if (req.file) {
-            itemData.image = `/uploads/${req.file.filename}`;
+            itemData.image = req.file.path;
         }
         if (itemData.modules && typeof itemData.modules === 'string') {
             itemData.modules = itemData.modules.split(',').map(m => m.trim());
@@ -359,7 +360,10 @@ exports.updateItem = async (req, res) => {
 
         const itemData = { ...req.body };
         if (req.file) {
-            itemData.image = `/uploads/${req.file.filename}`;
+            if (page.items[itemIndex].image) {
+                await cleanupMedia(page.items[itemIndex].image);
+            }
+            itemData.image = req.file.path;
         }
         if (itemData.modules && typeof itemData.modules === 'string') {
             itemData.modules = itemData.modules.split(',').map(m => m.trim());
@@ -380,6 +384,11 @@ exports.deleteItem = async (req, res) => {
         const page = await LearningPageContent.findOne({ slug });
         if (!page) return res.status(404).json({ message: 'Page not found' });
 
+        const item = page.items.find(i => i._id.toString() === itemId);
+        if (item && item.image) {
+            await cleanupMedia(item.image);
+        }
+
         page.items = page.items.filter(i => i._id.toString() !== itemId);
         await page.save();
         res.json({ message: 'Item deleted successfully' });
@@ -394,16 +403,8 @@ exports.deleteMedia = async (req, res) => {
         const { filePath } = req.body;
         if (!filePath) return res.status(400).json({ message: 'No file path provided' });
 
-        const fs = require('fs');
-        const path = require('path');
-        const absolutePath = path.join(__dirname, '..', filePath);
-
-        if (fs.existsSync(absolutePath)) {
-            fs.unlinkSync(absolutePath);
-            res.json({ message: 'Media file purged from vessel' });
-        } else {
-            res.status(404).json({ message: 'File not found in archives' });
-        }
+        await cleanupMedia(filePath);
+        res.json({ message: 'Media file purged from vessel' });
     } catch (e) {
         res.status(500).json({ message: e.message });
     }

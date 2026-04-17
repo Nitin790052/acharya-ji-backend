@@ -1,5 +1,6 @@
 const AboutPageSettings = require('../models/AboutPageSettings');
 const AboutPageItem = require('../models/AboutPageItem');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 // Settings
 exports.getSettings = async (req, res) => {
@@ -15,16 +16,17 @@ const path = require('path');
 
 exports.updateSettings = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        if (req.file) updateData.journeyImage = `/uploads/about/${req.file.filename}`;
+        if (req.file) {
+            let s = await AboutPageSettings.findOne();
+            if (s && s.journeyImage) {
+                await deleteMedia(s.journeyImage);
+            }
+            updateData.journeyImage = req.file.path;
+        }
         
         let s = await AboutPageSettings.findOne();
         if (!s) s = await AboutPageSettings.create(updateData);
         else {
-            if (req.file && s.journeyImage && s.journeyImage.startsWith('/uploads')) {
-                const oldPath = path.join(__dirname, '..', s.journeyImage);
-                if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-            }
             s = await AboutPageSettings.findOneAndUpdate({}, updateData, { new: true });
         }
         res.json(s);
@@ -52,7 +54,7 @@ exports.getAllItems = async (req, res) => {
 exports.createItem = async (req, res) => {
     try {
         const itemData = { ...req.body };
-        if (req.file) itemData.image = `/uploads/about/${req.file.filename}`;
+        if (req.file) itemData.image = req.file.path;
         const doc = await AboutPageItem.create(itemData);
         res.status(201).json(doc);
     } catch (e) { res.status(400).json({ message: e.message }); }
@@ -61,12 +63,11 @@ exports.createItem = async (req, res) => {
 exports.updateItem = async (req, res) => {
     try {
         const itemData = { ...req.body };
-        if (req.file) itemData.image = `/uploads/about/${req.file.filename}`;
+        if (req.file) itemData.image = req.file.path;
         
         const oldDoc = await AboutPageItem.findById(req.params.id);
-        if (req.file && oldDoc && oldDoc.image && oldDoc.image.startsWith('/uploads')) {
-            const oldPath = path.join(__dirname, '..', oldDoc.image);
-            if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        if (req.file && oldDoc && oldDoc.image) {
+            await deleteMedia(oldDoc.image);
         }
         
         const doc = await AboutPageItem.findByIdAndUpdate(req.params.id, itemData, { new: true });
@@ -77,9 +78,8 @@ exports.updateItem = async (req, res) => {
 exports.removeItem = async (req, res) => {
     try {
         const doc = await AboutPageItem.findById(req.params.id);
-        if (doc && doc.image && doc.image.startsWith('/uploads')) {
-            const oldPath = path.join(__dirname, '..', doc.image);
-            if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        if (doc && doc.image) {
+            await deleteMedia(doc.image);
         }
         await AboutPageItem.findByIdAndDelete(req.params.id);
         res.json({ message: 'Deleted' });

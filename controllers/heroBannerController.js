@@ -1,6 +1,5 @@
 const HeroBanner = require('../models/HeroBanner');
-const fs = require('fs');
-const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 exports.getAllBanners = async (req, res) => {
     try {
@@ -26,7 +25,7 @@ exports.createBanner = async (req, res) => {
             return res.status(400).json({ message: 'Image is required' });
         }
 
-        const imageUrl = `/uploads/carousels/${req.file.filename}`;
+        const imageUrl = req.file.path; // Full Cloudinary URL
         const bannerData = { ...req.body, imageUrl };
 
         // Handle buttons array if passed as JSON string
@@ -55,6 +54,10 @@ exports.updateBanner = async (req, res) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
+        
+        // Remove immutable fields to prevent Mongoose errors
+        const immutableFields = ['_id', '__v', 'createdAt', 'updatedAt', 'id'];
+        immutableFields.forEach(field => delete updates[field]);
 
         // Handle buttons array if passed as JSON string
         if (typeof updates.buttons === 'string') {
@@ -70,16 +73,12 @@ exports.updateBanner = async (req, res) => {
         }
 
         if (req.file) {
-            updates.imageUrl = `/uploads/carousels/${req.file.filename}`;
-
-            // Try to delete old image
-            const existingBanner = await HeroBanner.findById(id);
-            if (existingBanner && existingBanner.imageUrl) {
-                const oldImagePath = path.join(__dirname, '..', existingBanner.imageUrl);
-                if (fs.existsSync(oldImagePath)) {
-                    fs.unlinkSync(oldImagePath);
-                }
+            // Delete old image from storage
+            const oldRecord = await HeroBanner.findById(id);
+            if (oldRecord && oldRecord.imageUrl) {
+                await deleteMedia(oldRecord.imageUrl);
             }
+            updates.imageUrl = req.file.path; // Full Cloudinary URL
         }
 
         const updatedBanner = await HeroBanner.findByIdAndUpdate(id, updates, { new: true });
@@ -104,10 +103,7 @@ exports.deleteBanner = async (req, res) => {
         }
 
         if (banner.imageUrl) {
-            const imagePath = path.join(__dirname, '..', banner.imageUrl);
-            if (fs.existsSync(imagePath)) {
-                fs.unlinkSync(imagePath);
-            }
+            await deleteMedia(banner.imageUrl);
         }
 
         await HeroBanner.findByIdAndDelete(id);

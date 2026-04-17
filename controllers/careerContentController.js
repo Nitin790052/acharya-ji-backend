@@ -1,6 +1,7 @@
 const CareerContent = require('../models/CareerContent');
 const fs = require('fs');
 const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 const SEED_DATA = {
     eligibility: [
@@ -75,7 +76,7 @@ exports.createCareerContent = async (req, res) => {
     try {
         const data = { ...req.body };
         if (req.file) {
-            data.image = `/uploads/career/${req.file.filename}`;
+            data.image = req.file.path;
         }
         
         if (typeof data.items === 'string') {
@@ -106,10 +107,9 @@ exports.updateCareerContent = async (req, res) => {
 
         if (req.file) {
             if (content.image) {
-                const oldPath = path.join(__dirname, '..', content.image);
-                if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+                await deleteMedia(content.image);
             }
-            data.image = `/uploads/career/${req.file.filename}`;
+            data.image = req.file.path;
         }
 
         if (typeof data.items === 'string') {
@@ -136,8 +136,7 @@ exports.deleteCareerContent = async (req, res) => {
         if (!content) return res.status(404).json({ message: 'Content not found' });
 
         if (content.image) {
-            const imgPath = path.join(__dirname, '..', content.image);
-            if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+            await deleteMedia(content.image);
         }
 
         await CareerContent.findByIdAndDelete(req.params.id);

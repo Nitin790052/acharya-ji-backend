@@ -1,7 +1,6 @@
 const Astrologer = require('../models/Astrologer');
 const AstrologerSettings = require('../models/AstrologerSettings');
-const fs = require('fs');
-const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 exports.getSettings = async (req, res) => {
     try {
@@ -48,7 +47,7 @@ exports.getActiveAstrologers = async (req, res) => {
 exports.createAstrologer = async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Image is required' });
-        const imageUrl = `/uploads/astrologers/${req.file.filename}`;
+        const imageUrl = req.file.path; // Full Cloudinary URL
         const data = { ...req.body, imageUrl };
 
         // Parse array fields that come as comma-separated strings
@@ -70,6 +69,9 @@ exports.updateAstrologer = async (req, res) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
+        // Remove immutable fields to prevent Mongoose errors
+        const immutableFields = ['_id', '__v', 'createdAt', 'updatedAt', 'id'];
+        immutableFields.forEach(field => delete updates[field]);
 
         if (typeof updates.specialization === 'string') updates.specialization = updates.specialization.split(',').map(s => s.trim());
         if (typeof updates.languages === 'string') updates.languages = updates.languages.split(',').map(s => s.trim());
@@ -78,12 +80,11 @@ exports.updateAstrologer = async (req, res) => {
         if (updates.isActive !== undefined) updates.isActive = updates.isActive === 'true' || updates.isActive === true;
 
         if (req.file) {
-            updates.imageUrl = `/uploads/astrologers/${req.file.filename}`;
             const existing = await Astrologer.findById(id);
             if (existing && existing.imageUrl) {
-                const oldImagePath = path.join(__dirname, '..', existing.imageUrl);
-                if (fs.existsSync(oldImagePath)) fs.unlinkSync(oldImagePath);
+                await deleteMedia(existing.imageUrl);
             }
+            updates.imageUrl = req.file.path; // Full Cloudinary URL
         }
 
         const updated = await Astrologer.findByIdAndUpdate(id, updates, { new: true });
@@ -99,10 +100,8 @@ exports.deleteAstrologer = async (req, res) => {
         const { id } = req.params;
         const record = await Astrologer.findById(id);
         if (!record) return res.status(404).json({ message: 'Not found' });
-        
         if (record.imageUrl) {
-            const imagePath = path.join(__dirname, '..', record.imageUrl);
-            if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+            await deleteMedia(record.imageUrl);
         }
         await Astrologer.findByIdAndDelete(id);
         res.status(200).json({ message: 'Deleted successfully' });

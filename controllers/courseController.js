@@ -1,5 +1,6 @@
 const Course = require('../models/Course');
 const CourseSettings = require('../models/CourseSettings');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 exports.getAllCourses = async (req, res) => {
     try {
@@ -26,7 +27,7 @@ exports.createCourse = async (req, res) => {
     try {
         const courseData = { ...req.body };
         if (req.file) {
-            courseData.imageUrl = `/uploads/${req.file.filename}`;
+            courseData.imageUrl = req.file.path;
         }
         const newCourse = new Course(courseData);
         await newCourse.save();
@@ -40,7 +41,11 @@ exports.updateCourse = async (req, res) => {
     try {
         const courseData = { ...req.body };
         if (req.file) {
-            courseData.imageUrl = `/uploads/${req.file.filename}`;
+            const existing = await Course.findById(req.params.id);
+            if (existing && existing.imageUrl) {
+                await deleteMedia(existing.imageUrl);
+            }
+            courseData.imageUrl = req.file.path;
         }
         const updatedCourse = await Course.findByIdAndUpdate(req.params.id, courseData, { new: true });
         res.status(200).json(updatedCourse);
@@ -51,6 +56,10 @@ exports.updateCourse = async (req, res) => {
 
 exports.deleteCourse = async (req, res) => {
     try {
+        const course = await Course.findById(req.params.id);
+        if (course && course.imageUrl) {
+            await deleteMedia(course.imageUrl);
+        }
         await Course.findByIdAndDelete(req.params.id);
         res.status(200).json({ message: 'Course deleted successfully' });
     } catch (error) {

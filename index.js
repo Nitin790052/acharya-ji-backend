@@ -1,9 +1,17 @@
 const express = require('express');
 const dotenv = require('dotenv');
+dotenv.config(); // Must be at the top!
 const cors = require('cors');
 const path = require('path');
 const compression = require('compression');
 const connectDB = require('./config/db');
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+    console.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
+    console.error(err.name, err.message, err.stack);
+});
+
 const navbarRoutes = require('./routes/navbarRoutes');
 const heroBannerRoutes = require('./routes/heroBannerRoutes');
 const aboutUsRoutes = require('./routes/aboutUsRoutes');
@@ -29,8 +37,6 @@ const contactSettingsRoutes = require('./routes/contactSettingsRoutes');
 const sitemapRoutes = require('./routes/sitemapRoutes');
 const seoRoutes = require('./routes/seoRoutes');
 const courseRoutes = require('./routes/courseRoutes');
-
-dotenv.config();
 
 // Connect to Database
 connectDB();
@@ -105,6 +111,19 @@ app.get('/sitemap.xml', (req, res) => res.redirect('/api/sitemap'));
 
 app.get('/', (req, res) => {
     res.send('API is running...');
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error('--- SERVER ERROR ---');
+    console.error('Message:', err.message);
+    console.error('Stack:', err.stack);
+    console.error('--------------------');
+    res.status(err.status || 500).json({
+        success: false,
+        message: err.message || 'Internal Server Error',
+        error: process.env.NODE_ENV === 'development' ? err : {}
+    });
 });
 
 const PORT = process.env.PORT || 5000;

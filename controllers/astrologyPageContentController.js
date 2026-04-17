@@ -1,4 +1,5 @@
 const AstrologyPageContent = require('../models/AstrologyPageContent');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 // Default seed data for all 8 astrology pages
 const SEED_DATA = [
@@ -417,7 +418,11 @@ const astrologyPageContentController = {
             // Handle Hero Image Upload or Fallback
             if (req.files && req.files.heroImage) {
                 if (!data.hero) data.hero = {};
-                data.hero.imageUrl = `/uploads/astrology/${req.files.heroImage[0].filename}`;
+                // Cleanup old hero image
+                const oldPage = await AstrologyPageContent.findOne({ pageSlug: data.pageSlug });
+                if (oldPage?.hero?.imageUrl) await deleteMedia(oldPage.hero.imageUrl);
+                
+                data.hero.imageUrl = req.files.heroImage[0].path;
             } else if (!data.hero?.imageUrl) {
                 const defaultSeed = SEED_DATA.find(s => s.pageSlug === data.pageSlug);
                 if (defaultSeed?.hero?.imageUrl) {
@@ -433,7 +438,11 @@ const astrologyPageContentController = {
             // Handle Deep Dive Image Upload or Fallback
             if (req.files && req.files.deepDiveImage) {
                 if (!data.deepDive) data.deepDive = {};
-                data.deepDive.imageUrl = `/uploads/astrology/${req.files.deepDiveImage[0].filename}`;
+                // Cleanup old deep dive image
+                const oldPage = await AstrologyPageContent.findOne({ pageSlug: data.pageSlug });
+                if (oldPage?.deepDive?.imageUrl) await deleteMedia(oldPage.deepDive.imageUrl);
+                
+                data.deepDive.imageUrl = req.files.deepDiveImage[0].path;
             } else if (!data.deepDive?.imageUrl) {
                 const defaultSeed = SEED_DATA.find(s => s.pageSlug === data.pageSlug);
                 if (defaultSeed?.deepDive?.imageUrl) {
@@ -461,8 +470,13 @@ const astrologyPageContentController = {
     // Delete a page
     deletePage: async (req, res) => {
         try {
-            const deleted = await AstrologyPageContent.findOneAndDelete({ pageSlug: req.params.slug });
-            if (!deleted) return res.status(404).json({ message: 'Page not found' });
+            const page = await AstrologyPageContent.findOne({ pageSlug: req.params.slug });
+            if (!page) return res.status(404).json({ message: 'Page not found' });
+
+            if (page.hero?.imageUrl) await deleteMedia(page.hero.imageUrl);
+            if (page.deepDive?.imageUrl) await deleteMedia(page.deepDive.imageUrl);
+
+            await AstrologyPageContent.findOneAndDelete({ pageSlug: req.params.slug });
             res.json({ message: 'Page deleted successfully' });
         } catch (error) {
             res.status(500).json({ message: error.message });

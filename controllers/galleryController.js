@@ -1,7 +1,6 @@
 const Gallery = require('../models/Gallery');
 const GallerySettings = require('../models/GallerySettings');
-const fs = require('fs');
-const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 // Get all gallery items
 exports.getAllGallery = async (req, res) => {
@@ -52,24 +51,15 @@ exports.createGallery = async (req, res) => {
         });
 
         if (duplicate) {
-            // Delete uploaded files if any, to avoid orphan files
-            if (req.files) {
-                if (req.files.image && req.files.image[0]) {
-                    fs.unlinkSync(req.files.image[0].path);
-                }
-                if (req.files.video && req.files.video[0]) {
-                    fs.unlinkSync(req.files.video[0].path);
-                }
-            }
             return res.status(400).json({ message: 'An item with this exact title, category, and Media Type already exists.' });
         }
 
         if (req.files) {
             if (req.files.image && req.files.image[0]) {
-                data.image = `/uploads/gallery/${req.files.image[0].filename}`;
+                data.image = req.files.image[0].path;
             }
             if (req.files.video && req.files.video[0]) {
-                data.video = `/uploads/gallery/${req.files.video[0].filename}`;
+                data.video = req.files.video[0].path;
                 data.videoLink = ''; // Clear link when file is uploaded
             }
         }
@@ -92,6 +82,9 @@ exports.updateGallery = async (req, res) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
+        // Remove immutable fields to prevent Mongoose errors
+        const immutableFields = ['_id', '__v', 'createdAt', 'updatedAt', 'id'];
+        immutableFields.forEach(field => delete updates[field]);
 
         // Parse tags if sent as string
         if (typeof updates.tags === 'string') {
@@ -110,47 +103,29 @@ exports.updateGallery = async (req, res) => {
         });
 
         if (duplicate) {
-            // Delete newly uploaded files if any
-            if (req.files) {
-                if (req.files.image && req.files.image[0]) {
-                    fs.unlinkSync(req.files.image[0].path);
-                }
-                if (req.files.video && req.files.video[0]) {
-                    fs.unlinkSync(req.files.video[0].path);
-                }
-            }
             return res.status(400).json({ message: 'An item with this exact title, category, and Media Type already exists.' });
         }
 
         if (req.files) {
             if (req.files.image && req.files.image[0]) {
-                updates.image = `/uploads/gallery/${req.files.image[0].filename}`;
-                if (existing.image && existing.image.startsWith('/uploads/')) {
-                    const oldPath = path.join(__dirname, '..', existing.image);
-                    if (fs.existsSync(oldPath)) {
-                        try { fs.unlinkSync(oldPath); } catch (e) {}
-                    }
+                if (existing.image) {
+                    await deleteMedia(existing.image);
                 }
+                updates.image = req.files.image[0].path;
             }
             if (req.files.video && req.files.video[0]) {
-                updates.video = `/uploads/gallery/${req.files.video[0].filename}`;
-                updates.videoLink = ''; // Clear link when file is uploaded
-                if (existing.video && existing.video.startsWith('/uploads/')) {
-                    const oldPath = path.join(__dirname, '..', existing.video);
-                    if (fs.existsSync(oldPath)) {
-                        try { fs.unlinkSync(oldPath); } catch (e) {}
-                    }
+                if (existing.video) {
+                    await deleteMedia(existing.video);
                 }
+                updates.video = req.files.video[0].path;
+                updates.videoLink = ''; // Clear link when file is uploaded
             }
         }
 
         // If videoLink is provided, clear any video file path
         if (updates.videoLink) {
-            if (existing.video && existing.video.startsWith('/uploads/')) {
-                const oldPath = path.join(__dirname, '..', existing.video);
-                if (fs.existsSync(oldPath)) {
-                    try { fs.unlinkSync(oldPath); } catch (e) {}
-                }
+            if (existing.video) {
+                await deleteMedia(existing.video);
             }
             updates.video = '';
         }
@@ -169,18 +144,8 @@ exports.deleteGallery = async (req, res) => {
         const item = await Gallery.findById(id);
         if (!item) return res.status(404).json({ message: 'Gallery item not found' });
 
-        if (item.image && item.image.startsWith('/uploads/')) {
-            const filePath = path.join(__dirname, '..', item.image);
-            if (fs.existsSync(filePath)) {
-                try { fs.unlinkSync(filePath); } catch (e) {}
-            }
-        }
-        if (item.video && item.video.startsWith('/uploads/')) {
-            const filePath = path.join(__dirname, '..', item.video);
-            if (fs.existsSync(filePath)) {
-                try { fs.unlinkSync(filePath); } catch (e) {}
-            }
-        }
+        if (item.image) await deleteMedia(item.image);
+        if (item.video) await deleteMedia(item.video);
 
         await Gallery.findByIdAndDelete(id);
         res.status(200).json({ message: 'Gallery item deleted' });

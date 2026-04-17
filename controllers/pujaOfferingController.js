@@ -1,6 +1,6 @@
 const PujaOffering = require('../models/PujaOffering');
-const fs = require('fs');
 const path = require('path');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 // @desc    Get all offerings
 // @route   GET /api/puja-offerings
@@ -39,23 +39,26 @@ exports.updateOffering = async (req, res) => {
         // Handle Main Image
         const mainImage = req.files?.find(f => f.fieldname === 'image');
         if (mainImage) {
-            if (offering.imageUrl && !offering.imageUrl.startsWith('http')) {
-                const oldPath = path.join(__dirname, '..', offering.imageUrl);
-                if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+            if (offering.imageUrl) {
+                await deleteMedia(offering.imageUrl);
             }
-            data.imageUrl = `/uploads/puja-offerings/${mainImage.filename}`;
+            data.imageUrl = mainImage.path;
         }
 
         // Handle Service Mode Images
         if (data.serviceModes) {
-            data.serviceModes = data.serviceModes.map((mode, idx) => {
+            data.serviceModes = await Promise.all(data.serviceModes.map(async (mode, idx) => {
                 const modeImg = req.files?.find(f => f.fieldname === `serviceModeImage_${idx}`);
                 if (modeImg) {
-                    // Update image path
-                    return { ...mode, imageUrl: `/uploads/puja-offerings/${modeImg.filename}` };
+                    // Find if there's an existing image for this mode
+                    const oldMode = offering.serviceModes?.[idx];
+                    if (oldMode && oldMode.imageUrl) {
+                        await deleteMedia(oldMode.imageUrl);
+                    }
+                    return { ...mode, imageUrl: modeImg.path };
                 }
                 return mode;
-            });
+            }));
         }
 
         const updated = await PujaOffering.findByIdAndUpdate(req.params.id, data, { new: true });
@@ -75,14 +78,14 @@ exports.createOffering = async (req, res) => {
 
         // Main Image
         const mainImage = req.files?.find(f => f.fieldname === 'image');
-        data.imageUrl = mainImage ? `/uploads/puja-offerings/${mainImage.filename}` : '';
+        data.imageUrl = mainImage ? mainImage.path : '';
 
         // Service Mode Images
         if (data.serviceModes) {
             data.serviceModes = data.serviceModes.map((mode, idx) => {
                 const modeImg = req.files?.find(f => f.fieldname === `serviceModeImage_${idx}`);
                 if (modeImg) {
-                    return { ...mode, imageUrl: `/uploads/puja-offerings/${modeImg.filename}` };
+                    return { ...mode, imageUrl: modeImg.path };
                 }
                 return mode;
             });
@@ -247,9 +250,14 @@ exports.deleteOffering = async (req, res) => {
         const offering = await PujaOffering.findById(req.params.id);
         if (!offering) return res.status(404).json({ message: 'Offering not found' });
 
-        if (offering.imageUrl && !offering.imageUrl.startsWith('http')) {
-            const oldPath = path.join(__dirname, '..', offering.imageUrl);
-            if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+        if (offering.imageUrl) {
+            await deleteMedia(offering.imageUrl);
+        }
+
+        if (offering.serviceModes && offering.serviceModes.length > 0) {
+            for (const mode of offering.serviceModes) {
+                if (mode.imageUrl) await deleteMedia(mode.imageUrl);
+            }
         }
 
         await PujaOffering.findByIdAndDelete(req.params.id);

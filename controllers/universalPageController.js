@@ -1,6 +1,7 @@
 const UniversalPageContent = require('../models/UniversalPageContent');
 const path = require('path');
 const fs = require('fs');
+const { deleteMedia: cleanupMedia } = require('../utils/mediaHandlers');
 
 /**
  * @desc    Get all universal pages overview
@@ -87,7 +88,7 @@ exports.uploadMedia = async (req, res) => {
         if (!req.file) {
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
-        const imageUrl = `/uploads/${req.file.filename}`;
+        const imageUrl = req.file.path;
         res.status(200).json({
             success: true,
             imageUrl
@@ -105,14 +106,8 @@ exports.deleteMedia = async (req, res) => {
         const { filePath } = req.body;
         if (!filePath) return res.status(400).json({ success: false, message: 'No path provided' });
 
-        const absolutePath = path.join(__dirname, '..', filePath);
-        
-        if (fs.existsSync(absolutePath)) {
-            fs.unlinkSync(absolutePath);
-            res.status(200).json({ success: true, message: 'File purged from server' });
-        } else {
-            res.status(404).json({ success: false, message: 'File not found on server' });
-        }
+        await cleanupMedia(filePath);
+        res.status(200).json({ success: true, message: 'Media purged from storage' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

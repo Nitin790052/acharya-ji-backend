@@ -1,8 +1,7 @@
 const Media = require('../models/Media');
 const MediaSettings = require('../models/MediaSettings');
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios'); // We'll assume axios is available or use fetch if on node 18+
+const axios = require('axios');
+const { deleteMedia } = require('../utils/mediaHandlers');
 
 exports.getAllMedia = async (req, res) => {
     try {
@@ -29,10 +28,10 @@ exports.createMedia = async (req, res) => {
         
         if (req.files) {
             if (req.files.image && req.files.image[0]) {
-                mediaData.image = `/uploads/media/${req.files.image[0].filename}`;
+                mediaData.image = req.files.image[0].path;
             }
             if (req.files.video && req.files.video[0]) {
-                mediaData.video = `/uploads/media/${req.files.video[0].filename}`;
+                mediaData.video = req.files.video[0].path;
             }
         }
 
@@ -48,27 +47,26 @@ exports.updateMedia = async (req, res) => {
     try {
         const { id } = req.params;
         const updates = { ...req.body };
+        // Remove immutable fields to prevent Mongoose errors
+        const immutableFields = ['_id', '__v', 'createdAt', 'updatedAt', 'id'];
+        immutableFields.forEach(field => delete updates[field]);
 
         if (req.files) {
             const existingMedia = await Media.findById(id);
             if (!existingMedia) return res.status(404).json({ message: 'Media not found' });
 
             if (req.files.image && req.files.image[0]) {
-                updates.image = `/uploads/media/${req.files.image[0].filename}`;
-                // Delete old image
-                if (existingMedia.image && existingMedia.image.startsWith('/uploads/')) {
-                    const oldPath = path.join(__dirname, '..', existingMedia.image);
-                    if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+                if (existingMedia.image) {
+                    await deleteMedia(existingMedia.image);
                 }
+                updates.image = req.files.image[0].path; // Cloudinary URL
             }
 
             if (req.files.video && req.files.video[0]) {
-                updates.video = `/uploads/media/${req.files.video[0].filename}`;
-                // Delete old video
-                if (existingMedia.video && existingMedia.video.startsWith('/uploads/')) {
-                    const oldPath = path.join(__dirname, '..', existingMedia.video);
-                    if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+                if (existingMedia.video) {
+                    await deleteMedia(existingMedia.video);
                 }
+                updates.video = req.files.video[0].path; // Cloudinary URL
             }
         }
 
@@ -92,14 +90,8 @@ exports.deleteMedia = async (req, res) => {
             return res.status(404).json({ message: 'Media not found' });
         }
 
-        if (media.image && media.image.startsWith('/uploads/')) {
-            const pathP = path.join(__dirname, '..', media.image);
-            if (fs.existsSync(pathP)) fs.unlinkSync(pathP);
-        }
-        if (media.video && media.video.startsWith('/uploads/')) {
-            const pathV = path.join(__dirname, '..', media.video);
-            if (fs.existsSync(pathV)) fs.unlinkSync(pathV);
-        }
+        if (media.image) await deleteMedia(media.image);
+        if (media.video) await deleteMedia(media.video);
 
         await Media.findByIdAndDelete(id);
         res.status(200).json({ message: 'Media deleted successfully' });
