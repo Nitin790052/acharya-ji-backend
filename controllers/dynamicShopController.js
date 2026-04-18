@@ -1,4 +1,4 @@
-const Product = require('../models/DynamicShopProduct');
+const DynamicShopProduct = require('../models/DynamicShopProduct');
 const DynamicShopCategory = require('../models/DynamicShopCategory');
 const DynamicShopContent = require('../models/DynamicShopContent');
 const { deleteMedia } = require('../utils/mediaHandlers');
