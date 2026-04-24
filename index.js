@@ -105,6 +105,7 @@ app.use('/api/vastu-content', vastuPageContentRoutes);
 app.use('/api/healing-content', healingPageContentRoutes);
 app.use('/api/courses', courseRoutes);
 app.use('/api/users', require('./routes/userRoutes'));
+app.use('/api/vendors', require('./routes/vendorRoutes'));
 
 // SEO Redirect for sitemap
 app.get('/sitemap.xml', (req, res) => res.redirect('/api/sitemap'));
