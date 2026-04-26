@@ -32,6 +32,14 @@ const VendorSchema = new mongoose.Schema({
         type: String, 
         required: [true, 'Please specify a category'] 
     },
+    businessName: {
+        type: String,
+        trim: true
+    },
+    isOnline: {
+        type: Boolean,
+        default: true
+    },
     
     // Document Details (from DocumentUploadSection)
     aadharNumber: { type: String },
@@ -60,6 +68,8 @@ const VendorSchema = new mongoose.Schema({
     // Profile Fields (Auto-populated or filled later)
     isVerified: { type: Boolean, default: false },
     rating: { type: Number, default: 5.0 },
+    avatar: { type: String, default: '' },
+    logo: { type: String, default: '' },
     registrationDate: { type: Date, default: Date.now }
 }, { timestamps: true });
 

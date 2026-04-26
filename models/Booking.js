@@ -49,6 +49,25 @@ const bookingSchema = new mongoose.Schema({
         enum: ['Pending', 'Confirmed', 'Completed', 'Cancelled'],
         default: 'Pending'
     },
+    vendor: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Vendor',
+        required: false
+    },
+    pandit: {
+        type: String,
+        trim: true
+    },
+    priority: {
+        type: String,
+        enum: ['low', 'medium', 'high', 'critical'],
+        default: 'medium'
+    },
+    receiptNo: {
+        type: String,
+        unique: true,
+        sparse: true
+    },
     isActive: {
         type: Boolean,
         default: true

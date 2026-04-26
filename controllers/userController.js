@@ -348,10 +348,17 @@ exports.verifyOtp = async (req, res) => {
 exports.registerUser = async (req, res) => {
     try {
         const { name, email, phone, password, location } = req.body;
+        console.log('Registration Attempt:', { name, email, phone, hasPassword: !!password, location });
+        console.log('File received:', req.file ? req.file.originalname : 'No file');
 
-        const userExists = await User.findOne({ $or: [{ email }, { phone }] });
-        if (userExists) {
-            return res.status(400).json({ success: false, message: 'User already exists' });
+        const existingEmail = await User.findOne({ email });
+        if (existingEmail) {
+            return res.status(400).json({ success: false, message: 'This email is already registered.' });
+        }
+
+        const existingPhone = await User.findOne({ phone });
+        if (existingPhone) {
+            return res.status(400).json({ success: false, message: 'This mobile number is already registered.' });
         }
 
         let avatar = '';
@@ -370,7 +377,16 @@ exports.registerUser = async (req, res) => {
             status: 'active'
         });
 
-        res.status(201).json({ success: true, message: 'Registration successful', data: user });
+        const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET || 'secret', {
+            expiresIn: '30d'
+        });
+
+        res.status(201).json({ 
+            success: true, 
+            message: 'Registration successful', 
+            token,
+            data: user 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
