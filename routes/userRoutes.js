@@ -6,7 +6,7 @@ const { protect } = require('../middleware/auth');
 const { uploadSingle } = require('../middleware/cloudinaryUpload');
 
 // Auth and Specific Routes
-router.post('/register', userController.registerUser);
+router.post('/register', uploadSingle('avatar', 'users'), userController.registerUser);
 router.post('/login', userController.loginUser);
 router.post('/send-otp', userController.sendOtp);
 router.post('/verify-otp', userController.verifyOtp);
